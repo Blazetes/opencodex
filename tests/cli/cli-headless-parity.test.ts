@@ -1615,6 +1615,44 @@ test("Aside status prints the empty-profile diagnostic for humans", async () => 
   } finally { log.mockRestore(); }
 });
 
+test("Aside status names preview-then-enable commands only for off (stale) profiles", async () => {
+  const profiles = [
+    { clientId: "aside", profileId: 0, name: "A", enabled: false, state: "stale" },
+    { clientId: "aside", profileId: 1, name: "B", enabled: true, state: "stale" },
+    { clientId: "aside", profileId: 2, name: "C", enabled: false, state: "conflict" },
+    { clientId: "aside", profileId: 3, name: "D", enabled: false, state: "current" },
+    { clientId: "aside", profileId: 4, name: "E", enabled: false, state: "stale" },
+  ];
+  const runtime = fakeRuntime(() => ({ clientId: "aside", profiles }));
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    expect(await handleClientIntegrationCommand(["status", "--client", "aside"], runtime.deps)).toBe(0);
+    const text = log.mock.calls.flat().join("\n");
+    expect(text).toContain("0  A: off (stale)");
+    expect(text.match(/--operation apply --profile \d+/g)).toEqual(["--operation apply --profile 0", "--operation apply --profile 4"]);
+    expect(text.match(/enable --client aside --profile \d+/g)).toEqual(["enable --client aside --profile 0", "enable --client aside --profile 4"]);
+    expect(text).toContain("Then, if the preview permits the change and you accept it:");
+    log.mockClear();
+    expect(await handleClientIntegrationCommand(["status", "--client", "aside", "--json"], runtime.deps)).toBe(0);
+    expect(JSON.parse(log.mock.calls.flat().join("\n"))).toEqual({ clientId: "aside", profiles });
+    expect(runtime.requests.map(row => row.method)).toEqual(["GET", "GET"]);
+  } finally { log.mockRestore(); }
+});
+
+test("single Aside profile status adds recovery commands only when off (stale)", async () => {
+  let profile: Record<string, unknown> = { clientId: "aside", profileId: 4, enabled: false, state: "stale", installed: true };
+  const runtime = fakeRuntime(() => profile);
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    expect(await handleClientIntegrationCommand(["status", "--client", "aside", "--profile", "4"], runtime.deps)).toBe(0);
+    expect(log.mock.calls.flat().join("\n")).toContain("ocx integration client enable --client aside --profile 4");
+    profile = { ...profile, state: "conflict" }; log.mockClear();
+    expect(await handleClientIntegrationCommand(["status", "--client", "aside", "--profile", "4"], runtime.deps)).toBe(0);
+    expect(log.mock.calls.flat().join("\n")).not.toContain("enable --client aside");
+    expect(runtime.requests.map(row => row.path)).toEqual(["/api/client-integrations/aside/profiles/4", "/api/client-integrations/aside/profiles/4"]);
+  } finally { log.mockRestore(); }
+});
+
 describe("Aside CLI recovery metadata", () => {
   test.each([
     { name: "a long POSIX backup path", snapshotPath: `/tmp/aside-recovery/${"profile-2-snapshot/".repeat(80)}models.json.bak` },
