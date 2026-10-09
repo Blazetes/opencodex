@@ -25,18 +25,29 @@ function harness(invoke?: (name: string, args?: unknown) => Promise<unknown>) {
     replaceChildren(...items: Array<{ textContent: string }>) { this.children = items; },
   }]));
   const timers = new Map<number, () => void>();
+  let poll: () => void = () => {};
   let nextTimer = 0;
   runInNewContext(script, {
     window: { __TAURI__: invoke ? { core: { invoke } } : undefined },
     document: { getElementById: (id: string) => nodes.get(id), createElement: () => ({ textContent: "" }) },
     setTimeout: (callback: () => void) => { const id = ++nextTimer; timers.set(id, callback); return id; },
     clearTimeout: (id: number) => { timers.delete(id); },
-    setInterval: () => 1, Promise, Error,
+    setInterval: (callback: () => void) => { poll = callback; return 1; }, Promise, Error,
   });
-  return { nodes, handlers, timers };
+  return { nodes, handlers, timers, poll: () => poll() };
 }
 
 async function settle() { for (let i = 0; i < 12; i += 1) await Promise.resolve(); }
+
+function deferred() {
+  let resolve!: (value: unknown) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<unknown>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+const configured = { enabled: true, phase: "configured", expectedExecutable: "/example/ocx", issues: [] };
+const disabled = { ...configured, enabled: false, phase: "disabled" };
 
 describe("desktop CLI command surface", () => {
   test("registers four path-free commands and guards every wrapper before dispatch", () => {
@@ -58,6 +69,12 @@ describe("desktop CLI command surface", () => {
 
   test("Back uses the settings guard while update commands keep their update-only guard", () => {
     expect(commandBody("return_to_dashboard")).toContain("window::require_local_settings_page(&window)?");
+    const startup = read("desktop/src-tauri/src/startup.rs");
+    const back = startup.match(/fn return_ready_dashboard\([\s\S]*?\n\}/)?.[0] || "";
+    expect(back).toContain("dashboard.unwrap_or(");
+    expect(back).toContain('"tauri://localhost/index.html"');
+    expect(back).toContain('"http://tauri.localhost/index.html"');
+    expect(back).toContain('cfg!(target_os = "windows")');
     for (const name of ["update_status", "update_check", "update_install"]) {
       expect(commandBody(name)).toContain("window::require_update_page(&window)?");
     }
@@ -114,6 +131,61 @@ describe("desktop CLI command surface", () => {
     silent.timers.values().next().value!();
     await settle();
     expect(silent.nodes.get("error")!.textContent).toContain("30 seconds");
+  });
+
+  for (const outcome of ["result", "error"] as const) {
+    test(`a delayed poll ${outcome} cannot overwrite a newer action and queues a fresh status`, async () => {
+      const oldPoll = deferred();
+      const action = deferred();
+      const freshPoll = deferred();
+      let statusCalls = 0;
+      const ui = harness(name => {
+        if (name === "cli_status") {
+          statusCalls += 1;
+          if (statusCalls === 1) return Promise.resolve(configured);
+          return statusCalls === 2 ? oldPoll.promise : freshPoll.promise;
+        }
+        return action.promise;
+      });
+      await settle();
+      ui.poll();
+      ui.handlers.get("remove:click")!();
+      action.resolve(disabled);
+      await settle();
+      expect(ui.nodes.get("enabled")!.checked).toBe(false);
+      expect(statusCalls).toBe(2); // the old poll is still in flight
+      if (outcome === "result") oldPoll.resolve(configured);
+      else oldPoll.reject(new Error("stale-poll-error"));
+      await settle();
+      expect(ui.nodes.get("enabled")!.checked).toBe(false);
+      expect(ui.nodes.get("error")!.hidden).toBe(true);
+      expect(statusCalls).toBe(3); // exactly one follow-up after the old poll settles
+      freshPoll.resolve({ ...disabled, phase: "partial", issues: ["fresh-status"] });
+      await settle();
+      expect(ui.nodes.get("state")!.textContent).toContain("Some configuration");
+      expect(ui.nodes.get("issues")!.children[0]!.textContent).toBe("fresh-status");
+      expect(statusCalls).toBe(3);
+      expect(ui.timers.size).toBe(0);
+    });
+  }
+
+  test("a stale poll error cannot replace the current action error", async () => {
+    const oldPoll = deferred();
+    const action = deferred();
+    let statusCalls = 0;
+    const ui = harness(name => name === "cli_status"
+      ? (++statusCalls === 1 ? Promise.resolve(configured) : statusCalls === 2 ? oldPoll.promise : Promise.resolve(configured))
+      : action.promise);
+    await settle();
+    ui.poll();
+    ui.handlers.get("repair:click")!();
+    action.reject(new Error("current-action-error"));
+    await settle();
+    oldPoll.reject(new Error("stale-poll-error"));
+    await settle();
+    expect(ui.nodes.get("error")!.textContent).toBe("Error: current-action-error");
+    expect(ui.nodes.get("error")!.hidden).toBe(false);
+    expect(statusCalls).toBe(3);
   });
 
   test("ready completion preserves CLI settings during launch and recovery", () => {
