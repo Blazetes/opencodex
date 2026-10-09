@@ -2598,6 +2598,7 @@ export const zhTW: Record<TKey, string> = {
   "sidebar.updateAvailable": "有可用更新：{version}",
   "sidebar.checkUpdate": "檢查更新",
   "sidebar.desktopUpdate": "開啟桌面應用程式更新",
+  "sidebar.terminalCommand": "終端機指令",
   "dash.mem.jsHeapArena": "arena {total}",
   "dash.mem.pressure": "相對於警告閾值",
   "dash.mem.pressureOf": "警告閾值的 {pct}%",

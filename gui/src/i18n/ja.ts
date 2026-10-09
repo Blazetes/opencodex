@@ -208,6 +208,7 @@ export const ja: Record<TKey, string> = {
   "sidebar.updateAvailable": "更新あり: {version}",
   "sidebar.checkUpdate": "更新を確認",
   "sidebar.desktopUpdate": "デスクトップアプリの更新を開く",
+  "sidebar.terminalCommand": "ターミナルコマンド",
   "common.save": "保存",
   "common.saving": "保存中…",
   "common.cancel": "キャンセル",

@@ -139,6 +139,7 @@ export const vi: Record<TKey, string> = {
   "sidebar.updateAvailable": "Bản cập nhật có sẵn: {version}",
   "sidebar.checkUpdate": "Kiểm tra bản cập nhật",
   "sidebar.desktopUpdate": "Mở cập nhật ứng dụng máy tính",
+  "sidebar.terminalCommand": "Lệnh terminal",
   "common.save": "Lưu",
   "common.saving": "Đang lưu…",
   "common.cancel": "Hủy",
