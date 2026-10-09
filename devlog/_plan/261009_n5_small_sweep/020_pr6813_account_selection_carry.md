@@ -46,3 +46,37 @@ have, so the lane carries it onto current dev in a maintainer branch where repos
 READY = carry PR exact-head CI green, both reviews PASS, MERGEABLE. After merge the coordinator closes #6813
 with credit. Residual risks reported: recovery accepts any valid matching snapshot (observed-state, not
 writer attribution); non-cooperating external writers after the final freshness check.
+
+## Cycle revision (wp2 P, origin/dev 37e9294125)
+
+dev moved to `37e9294125` (#6820 and the #6734 merge); neither touches #6813's files. `git merge-tree --write-tree
+origin/dev refs/remotes/pr/6813` is clean (tree `3d755f0d31`). #6811 is merged (`c3bbaaa342`) and orthogonal.
+
+- **C1 branch.** In the lane worktree: `git switch -c codex/n5-6813-account-selection origin/dev`, then
+  `git cherry-pick 91e24b0c30 8441b1bc68`. Both commits keep author Hulk <happyhls@gmail.com>. No content edits unless a
+  review finding requires one, in a separate maintainer commit carrying `Co-authored-by: hulkbig <happyhls@gmail.com>`.
+- **C2 reviews.** Independent gpt-6.1-sol security reviewer (01a12063-915d) and correctness reviewer (01a12063-926c),
+  neither given builder context, review #6813's head against current dev in their own /tmp worktrees.
+- **C3 checks (receipt, temporary HOME, carry branch checked out).** `bun test
+  tests/codex-integration/codex-account-selection-atomicity.test.ts tests/codex-integration/codex-auth-api.test.ts
+  tests/config/config-user-edits.test.ts tests/codex-integration/codex-pool-rotation.test.ts`, `bun test
+  tests/test-layout.test.ts tests/test-layout-tooling.test.ts`, `bun run typecheck`, `bun run structure:check`,
+  `bun run privacy:scan`.
+- **C4 publish and merge.** Push the branch, open a dev PR with the full template (Summary, Verification, Checklist),
+  `Carries #6813`, and `Co-authored-by: hulkbig <happyhls@gmail.com>` in the body. After the exact-head CI and both
+  reviews pass and the merge gate holds, `gh pr merge --squash --admin --body` with the trailer, then close #6813 with a
+  credit comment (merged PR, merge commit, author). D closes on the carry branch before any record commit.
+
+### Architect K1–K4 folds
+
+- **K1/K2 tree binding.** Reviews start on the fork head; they count for the carry only if the carry branch tree equals
+  `git merge-tree --write-tree origin/dev refs/remotes/pr/6813` for the dev SHA the branch was cut from (recorded in the
+  PR). Any fold commit invalidates that equivalence and requires both reviewers to re-review the fold diff.
+- **K3 receipt binding.** Receipts run with the carry branch's final SHA checked out (cxc binds commit + clean state); any
+  later edit requires a fresh receipt. Minimal local scope is stated in the PR Verification section; the full suite and
+  Windows/macOS shards are left to hosted CI.
+- **K4 merge.** `gh pr merge <n> --squash --admin --match-head-commit <sha> --body-file <file>` where the file ends with
+  `Co-authored-by: hulkbig <happyhls@gmail.com>`. The PR description carries the maintainer-integration record
+  (MAINTAINERS.md `dev` exception) with exact-head verification. The dev ruleset (20763889) defines no required status
+  checks; the gate requires every triggered check to pass, and the queued-enforce-target exemption applies only because
+  no check is ruleset-required. Close #6813 only after the merge is confirmed.
