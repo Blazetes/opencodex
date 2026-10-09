@@ -468,7 +468,7 @@ fingerprint 方式をそのまま踏襲しますが、長時間の無人作業�
 
 ## 推論負荷
 
-Claude Code の `/effort` 設定はアダプターでも維持されます。
+Messages → Responses に変換されるリクエストでは、Claude Code の `/effort` 設定を次のようにマッピングします。
 
 | 転送形式 | マッピング |
  --- | --- |
@@ -476,7 +476,9 @@ Claude Code の `/effort` 設定はアダプターでも維持されます。
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`、≤16384→`medium`、それより大→`high` |
 | `thinking.type: "disabled"` | `reasoning: { effort: "none" }` を明示し、`summary` は省略します |
 
-解釈された値はリクエストログの **Reasoning effort** 列に表示されます。
+変換されたリクエストでは、マッピングされたレベルがリクエストログの **Reasoning effort** 列に表示されます。
+管理されたネイティブ Messages は、認識可能な `output_config.effort` がない場合、有効な thinking 予算を
+`budget:<tokens>` として記録します。このログ記録は送信本文を変更しません。
 
 ## 入力変換(Messages → Responses)
 

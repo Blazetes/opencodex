@@ -562,7 +562,7 @@ the client's own selector echoed in `response.model` (Anthropic routes keep `ant
 `modelIdentityLogFields` drops the same echo from older rows on read, so neither draws a false reroute.
 An absent upstream model stays absent; the tooltip
 retains all available model identities. Historical Codex `openai`, `chatgpt` and `openai-multi` main
-labels collapse for reporting; configured provider names ending in `-main` remain separate.
+labels collapse for reporting; configured provider names ending in `-main` remain separate. Native Messages request and attempt `requestedEffort` labels follow the [native Messages logging contract](data-planes/protocol-paths.md#managed-native-messages).
 
 Rows also carry the observed protocol path (`protocolTrace`), persisted in `usage.jsonl` and
 re-validated on read; the Logs list shows it as a text badge, the detail dialog as a section, and

@@ -433,7 +433,7 @@ Search 和图像描述沿用仓库已有的 Claude Code OAuth fingerprint 先例
 
 ## 推理强度
 
-Claude Code 的 `/effort` 设置会完整保留并传递给适配器：
+对于从 Messages 转换为 Responses 的请求，Claude Code 的 `/effort` 设置按下表映射：
 
 | 传输格式 | 映射 |
 | --- | --- |
@@ -441,7 +441,9 @@ Claude Code 的 `/effort` 设置会完整保留并传递给适配器：
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`，≤16384→`medium`，更高→`high` |
 | `thinking.type: "disabled"` | 显式发送 `reasoning: { effort: "none" }`，并省略 `summary` |
 
-解析后的值会显示在请求日志的 **Reasoning effort** 列中。
+对于转换后的请求，映射得到的档位会显示在请求日志的 **Reasoning effort** 列中。
+托管的原生 Messages 请求在没有可识别的 `output_config.effort` 时，将启用的 thinking 预算记录为
+`budget:<tokens>`；此日志记录不会更改传输的请求正文。
 
 ## 入站转换（Messages → Responses）
 

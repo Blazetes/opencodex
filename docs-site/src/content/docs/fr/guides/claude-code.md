@@ -611,7 +611,7 @@ pour de longues exécutions sans surveillance.
 
 ## Effort de raisonnement
 
-Le paramètre `/effort` de Claude Code est conservé sur l'ensemble de l'adaptateur :
+Pour les requêtes traduites de Messages vers Responses, le paramètre `/effort` de Claude Code est converti comme suit :
 
 | Format du protocole | Correspondance |
 | --- | --- |
@@ -619,7 +619,9 @@ Le paramètre `/effort` de Claude Code est conservé sur l'ensemble de l'adaptat
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, ci-dessus→`high` |
 | `thinking.type: "disabled"` | `reasoning: { effort: "none" }` ; résumé omis |
 
-La valeur résolue apparaît dans la colonne **Effort de raisonnement** du journal des demandes.
+Pour les requêtes traduites, le niveau obtenu apparaît dans la colonne **Effort de raisonnement** du journal des demandes.
+Les requêtes Messages natives gérées consignent le budget de réflexion activé sous la forme `budget:<tokens>`
+en l'absence d'un `output_config.effort` reconnu ; cette journalisation ne modifie pas le corps transmis.
 
 ## Traduction entrante (Messages → Réponses)
 
