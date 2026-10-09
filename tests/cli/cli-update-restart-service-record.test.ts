@@ -27,7 +27,10 @@ test("captures absence, authority position and parses ownership from the capture
   expect(() => assertUpdateRestartServiceRecord(installed.serviceRecord, s.deps)).toThrow("update_restart_home_changed");
 });
 test("same revision provenance, same-size restored-mtime edit and identical-byte replacement refuse", () => {
-  for (const edit of ["provenance", "mtime", "replace", "mode", "definition", "create-definition", "delete-definition"] as const) {
+  // Windows chmod only toggles the read-only bit, so 0o644 -> 0o600 is not an observable edit
+  // there; update restarts on Windows are refused before admission in any case.
+  const edits = ["provenance", "mtime", "replace", "mode", "definition", "create-definition", "delete-definition"] as const;
+  for (const edit of edits.filter((e) => e !== "mode" || process.platform !== "win32")) {
     const s = setup(); const raw = JSON.stringify(s.state); writeFileSync(s.authority, raw); chmodSync(s.authority, 0o644);
     if (edit !== "create-definition") writeFileSync(s.definition, "definition-a");
     const before = lstatSync(s.authority); const captured = captureUpdateRestartServiceRecord(s.deps);
@@ -38,7 +41,7 @@ test("same revision provenance, same-size restored-mtime edit and identical-byte
     if (edit === "definition") writeFileSync(s.definition, "definition-b");
     if (edit === "create-definition") writeFileSync(s.definition, "definition-a");
     if (edit === "delete-definition") unlinkSync(s.definition);
-    expect(() => assertUpdateRestartServiceRecord(captured.serviceRecord, s.deps)).toThrow("update_restart_home_changed");
+    expect(() => assertUpdateRestartServiceRecord(captured.serviceRecord, s.deps), edit).toThrow("update_restart_home_changed");
   }
 });
 test("mirror and authority creation, deletion, conflict and candidate membership drift refuse", () => {
