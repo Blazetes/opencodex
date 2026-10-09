@@ -19,7 +19,7 @@ import type { UpdateRestartCandidate } from "./update-restart-candidate";
 import { INCOMPLETE_INSTALL_RECOVERY } from "./restart-failure";
 import { computeVersionSkew } from "./version-skew";
 import { createSupervisionLatch, inspectDesktopSupervision } from "../service/desktop-supervision.mjs";
-import { classifyUpdateRestartSystemdSupervision, probeUpdateRestartSupervision, runBoundedUpdateRestartSupervisor, UPDATE_RESTART_SYSTEMD_ARGS, type UpdateRestartSupervisionDeps } from "./update-restart-supervision";
+import { classifyUpdateRestartSystemdSupervision, probeUpdateRestartSupervision, resolveUpdateRestartSupervisor, runBoundedUpdateRestartSupervisor, UPDATE_RESTART_SYSTEMD_ARGS, type UpdateRestartSupervisionDeps } from "./update-restart-supervision";
 
 export interface UpdateRestartChild { pid?: number; exitCode: number | null; signalCode: string | null }
 export interface UpdateRestartIo {
@@ -222,15 +222,17 @@ export function standalone(target: UpdateRestartCandidate["target"], deadlineAt:
   }
   catch { throw new UpdateRestartEligibilityError("service"); }
   const supervision = { ...deps.supervision, platform };
-  if (probeUpdateRestartSupervision(deadlineAt, supervision) !== "inactive") throw new UpdateRestartEligibilityError("service");
+  const managerCommand = resolveUpdateRestartSupervisor(supervision);
+  if (!managerCommand) throw new UpdateRestartEligibilityError("service");
+  if (probeUpdateRestartSupervision(deadlineAt, supervision, managerCommand) !== "inactive") throw new UpdateRestartEligibilityError("service");
   const manager = inspectGuardedManagerTarget(target.pid, target.port, {
     ...deps.manager, platform,
     launchctl: args => {
-      const result = runBoundedUpdateRestartSupervisor("/bin/launchctl", args, deadlineAt, supervision);
+      const result = runBoundedUpdateRestartSupervisor(managerCommand, args, deadlineAt, supervision);
       return { ...result, ok: result.status === 0 };
     },
     systemdShow: () => {
-      const result = runBoundedUpdateRestartSupervisor("systemctl", UPDATE_RESTART_SYSTEMD_ARGS, deadlineAt, supervision);
+      const result = runBoundedUpdateRestartSupervisor(managerCommand, UPDATE_RESTART_SYSTEMD_ARGS, deadlineAt, supervision);
       if (classifyUpdateRestartSystemdSupervision(result) !== "inactive") throw new Error("update_restart_supervision_unverified");
       return result.stdout;
     },

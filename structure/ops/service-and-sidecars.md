@@ -59,7 +59,9 @@ physical homes. `src/cli/update-restart-home.ts` captures the service-record dig
 including confirmed absences and the authoritative position, plus the launchd plist or
 systemd unit. State and ownership resolve from those captured bytes. Each present regular
 file contributes SHA-256 content and bigint device, inode, size, nanosecond mtime/ctime,
-mode, uid and gid. Descriptor stats bracket the read; a final pathname stat must agree.
+mode, uid and gid. The opened descriptor must be regular and match device/inode before any
+read. Each record is limited to 1 MiB, read in bounded chunks with growth beyond that limit
+refused. Descriptor stats bracket the read; a final pathname stat must agree.
 Symlinks, inconsistent reads, malformed state, unreadable candidates and membership drift
 refuse. Canonical directory aliases remain equivalent. Lock, PID and runtime records are excluded.
 
@@ -68,7 +70,12 @@ parent, no ownership claim and no client/sibling role. An installed record witho
 admits only with positively inactive supervision. `src/cli/update-restart-supervision.ts`
 probes both launchd domains even without a plist; only exit 112/113 establishes absence.
 Systemd requires loaded or not-found, inactive and MainPID zero. Unknown evidence refuses.
-Each command, including the retained PID-bound manager check, uses at most two seconds
+Manager executables resolve only from /usr/bin/systemctl then /bin/systemctl on Linux, or
+/bin/launchctl on macOS; they must be regular, executable and not world-writable. The
+supervision and retained PID-bound checks share the resolved path. Linux commands use an
+explicit environment from `src/service/systemd.ts`: when XDG_RUNTIME_DIR is missing and
+/run/user/<uid> exists, it is set in that subprocess environment; inherited bus addresses
+are preserved. Restart probes do not mutate process.env. Each command uses at most two seconds
 and the remaining transaction deadline, which is checked again after execution.
 
 The ownership mutation lease covers stop and the single spawn. Every parent `checkHome`

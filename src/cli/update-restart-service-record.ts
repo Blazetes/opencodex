@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync, type BigIntStats } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readSync, realpathSync, type BigIntStats } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { plistPath, resolveServiceOwnership, resolveServiceState, serviceStatePaths, type ServiceStateEvidence } from "../service/state";
 import { unitPath } from "../service/systemd";
@@ -10,9 +10,14 @@ export interface UpdateRestartServiceRecordDeps {
   platform?: NodeJS.Platform;
   paths?: () => readonly string[];
   definitionPath?: () => string;
-  read?: (fd: number) => Buffer;
+  open?: (path: string, flags: number) => number;
+  fstat?: (fd: number) => BigIntStats;
+  read?: (fd: number, buffer: Buffer, offset: number, length: number, position: number) => number;
   lstat?: (path: string) => BigIntStats;
 }
+/** Maximum bytes per state candidate or platform definition: 1 MiB, including growth during read. */
+export const UPDATE_RESTART_SERVICE_RECORD_MAX_BYTES = 1024 * 1024;
+const READ_CHUNK_BYTES = 64 * 1024;
 const FAILURE = "update_restart_service_record_unverified";
 const hash = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
 const metadata = (stat: BigIntStats) => [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs, stat.mode, stat.uid, stat.gid].map(String);
@@ -25,6 +30,22 @@ function canonicalPath(path: string): string {
   catch (error) {
     if (!absent(error) || parent === path) throw new Error(FAILURE);
     return join(canonicalPath(parent), basename(path));
+  }
+}
+
+function readBoundedRecord(fd: number, read: NonNullable<UpdateRestartServiceRecordDeps["read"]>): Buffer {
+  const chunk = Buffer.alloc(READ_CHUNK_BYTES);
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    // At the limit, a one-byte read distinguishes EOF from concurrent growth.
+    const length = Math.min(chunk.length, UPDATE_RESTART_SERVICE_RECORD_MAX_BYTES - total + 1);
+    const count = read(fd, chunk, 0, length, total);
+    if (!Number.isInteger(count) || count < 0 || count > length) throw new Error(FAILURE);
+    if (count === 0) return Buffer.concat(chunks, total);
+    total += count;
+    if (total > UPDATE_RESTART_SERVICE_RECORD_MAX_BYTES) throw new Error(FAILURE);
+    chunks.push(Buffer.from(chunk.subarray(0, count)));
   }
 }
 
@@ -45,14 +66,18 @@ export function captureUpdateRestartServiceRecord(deps: UpdateRestartServiceReco
         return { path, canonical, index, identity: null, bytes: undefined };
       }
       if (!before.isFile() || before.isSymbolicLink()) throw new Error(FAILURE);
-      const fd = openSync(path, constants.O_RDONLY | (platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK));
+      const fd = (deps.open ?? openSync)(path, constants.O_RDONLY | (platform === "win32" ? 0 : constants.O_NOFOLLOW | constants.O_NONBLOCK));
       try {
-        const opened = fstatSync(fd, { bigint: true });
-        const bytes = (deps.read ?? (handle => readFileSync(handle)))(fd);
-        const after = fstatSync(fd, { bigint: true });
+        const statFd = deps.fstat ?? (handle => fstatSync(handle, { bigint: true }));
+        const opened = statFd(fd);
         const identity = metadata(before);
-        if (!opened.isFile() || JSON.stringify(identity) !== JSON.stringify(metadata(opened))
-          || JSON.stringify(identity) !== JSON.stringify(metadata(after)) || BigInt(bytes.length) !== after.size) throw new Error(FAILURE);
+        if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino
+          || opened.size < 0n || opened.size > BigInt(UPDATE_RESTART_SERVICE_RECORD_MAX_BYTES)
+          || JSON.stringify(identity) !== JSON.stringify(metadata(opened))) throw new Error(FAILURE);
+        const bytes = readBoundedRecord(fd, deps.read ?? readSync);
+        const after = statFd(fd);
+        if (!after.isFile() || JSON.stringify(identity) !== JSON.stringify(metadata(after))
+          || BigInt(bytes.length) !== after.size) throw new Error(FAILURE);
         return { path, canonical, index, identity, bytes };
       } finally { closeSync(fd); }
     });

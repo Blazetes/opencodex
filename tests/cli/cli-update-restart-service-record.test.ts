@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, lstatSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, fstatSync, lstatSync, mkdtempSync, openSync, readSync, renameSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { captureUpdateRestartServiceRecord, assertUpdateRestartServiceRecord, type UpdateRestartServiceRecordDeps } from "../../src/cli/update-restart-service-record";
@@ -71,13 +71,14 @@ test("invalid state, symlinked state or definition, EACCES and unstable reads re
       symlinkSync(s.authority === path ? s.mirror : s.authority, path);
     }
     if (edit === "eacces") s.deps.lstat = () => { throw Object.assign(new Error("private detail"), { code: "EACCES" }); };
-    if (edit === "read-drift" || edit === "path-drift") s.deps.read = fd => {
-      const bytes = readFileSync(fd);
+    if (edit === "read-drift" || edit === "path-drift") s.deps.read = (fd, buffer, offset, length, position) => {
+      const count = readSync(fd, buffer, offset, length, position);
+      const bytes = buffer.subarray(offset, offset + count);
       if (edit === "read-drift") writeFileSync(s.authority, JSON.stringify({ ...s.state, bunPath: "/fixture/bun-b" }));
       else { renameSync(s.authority, s.authority + ".old"); writeFileSync(s.authority, bytes); }
-      return bytes;
+      return count;
     };
-    if (edit === "absent-drift") s.deps.read = fd => { writeFileSync(s.mirror, JSON.stringify(s.state)); return readFileSync(fd); };
+    if (edit === "absent-drift") s.deps.read = (fd, buffer, offset, length, position) => { writeFileSync(s.mirror, JSON.stringify(s.state)); return readSync(fd, buffer, offset, length, position); };
     expect(() => captureUpdateRestartServiceRecord(s.deps)).toThrow("update_restart_service_record_unverified");
   }
 });
@@ -91,4 +92,53 @@ test("physical directory aliases retain fingerprint but record symlinks do not",
 test("an owned record stays owned even when its bytes are fingerprinted", () => {
   const s = setup(); writeFileSync(s.authority, JSON.stringify({ ...s.state, ownership: { owner: "desktop", installId: "fixture-install", consentGeneration: 1 } }));
   expect(captureUpdateRestartServiceRecord(s.deps).owner.kind).toBe("owned");
+});
+
+
+test("opened descriptor type and inode are checked before reading", () => {
+  for (const substitution of ["inode", "device", "directory"] as const) {
+    const s = setup(); writeFileSync(s.authority, JSON.stringify(s.state)); let reads = 0;
+    s.deps.fstat = fd => {
+      const stat = fstatSync(fd, { bigint: true });
+      return { ...stat, ino: substitution === "inode" ? stat.ino + 1n : stat.ino,
+        dev: substitution === "device" ? stat.dev + 1n : stat.dev, isFile: () => substitution !== "directory" };
+    };
+    s.deps.read = () => { reads++; throw new Error("must reject before reading"); };
+    expect(() => captureUpdateRestartServiceRecord(s.deps)).toThrow("update_restart_service_record_unverified");
+    expect(reads).toBe(0);
+  }
+});
+
+test("records above 1 MiB are rejected before any read", () => {
+  const s = setup(); writeFileSync(s.definition, Buffer.alloc(1024 * 1024 + 1)); let reads = 0;
+  s.deps.read = () => { reads++; throw new Error("must reject oversized stat before reading"); };
+  expect(() => captureUpdateRestartServiceRecord(s.deps)).toThrow("update_restart_service_record_unverified");
+  expect(reads).toBe(0);
+});
+
+
+test("an injected open substituting another regular descriptor refuses before reading", () => {
+  const s = setup(); writeFileSync(s.authority, JSON.stringify(s.state)); writeFileSync(s.definition, "substitute");
+  let reads = 0;
+  s.deps.open = (_path, flags) => openSync(s.definition, flags);
+  s.deps.read = () => { reads++; throw new Error("must not read substituted descriptor"); };
+  expect(() => captureUpdateRestartServiceRecord(s.deps)).toThrow("update_restart_service_record_unverified");
+  expect(reads).toBe(0);
+});
+
+test("bounded chunks admit exactly 1 MiB but reject growth beyond it", () => {
+  for (const grows of [false, true]) {
+    const s = setup(); const limit = 1024 * 1024;
+    writeFileSync(s.definition, Buffer.alloc(limit));
+    const reads: [number, number][] = [];
+    s.deps.read = (fd, buffer, offset, length, position) => {
+      reads.push([position, length]);
+      if (grows && position === limit) writeFileSync(s.definition, Buffer.alloc(limit + 1));
+      return readSync(fd, buffer, offset, length, position);
+    };
+    if (grows) expect(() => captureUpdateRestartServiceRecord(s.deps)).toThrow("update_restart_service_record_unverified");
+    else expect(captureUpdateRestartServiceRecord(s.deps).serviceRecord.schema).toBe(1);
+    expect(reads.length).toBe(17); expect(reads.at(-1)).toEqual([limit, 1]);
+    expect(reads.slice(0, -1).every(([, length]) => length === 64 * 1024)).toBe(true);
+  }
 });

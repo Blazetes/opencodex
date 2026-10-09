@@ -7,7 +7,7 @@ import { assertUpdateRestartConfiguration, readUpdateRestartHome, assertUpdateRe
 
 const roots: string[] = [];
 const checkHome = (home: ReturnType<typeof readUpdateRestartHome>) => assertUpdateRestartHome(home, Date.now() + 5000, {
-  supervision: { platform: "darwin", run: () => ({ status: 113, stdout: "", stderr: "" }) },
+  supervision: { stat: () => ({ isFile: () => true, mode: 0o100755 }), platform: "darwin", run: () => ({ status: 113, stdout: "", stderr: "" }) },
 });
 const initial = { ocx: process.env.OPENCODEX_HOME, codex: process.env.CODEX_HOME, state: process.env.OPENCODEX_SERVICE_STATE_PATH };
 afterEach(() => {

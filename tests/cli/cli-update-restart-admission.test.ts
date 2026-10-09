@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { fstatSync, mkdirSync, mkdtempSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertUpdateRestartHome, readUpdateRestartHome, type UpdateRestartHomeDeps } from "../../src/cli/update-restart-home";
@@ -28,7 +28,7 @@ function fixture(platform: "darwin" | "linux" = "darwin") {
   const state = { version: 2, backend: "scheduler", codexHome: codex, opencodexHome: config, revision: 1, bunPath: "/fixture/bun-a" };
   writeFileSync(record, JSON.stringify(state));
   let supervisionState = "inactive";
-  const supervision: UpdateRestartSupervisionDeps = { platform, now: () => 1000,
+  const supervision: UpdateRestartSupervisionDeps = { stat: () => ({ isFile: () => true, mode: 0o100755 }), platform, now: () => 1000,
     run: () => platform === "darwin" ? { status: supervisionState === "inactive" ? 113 : supervisionState === "active" ? 0 : 5, stdout: "", stderr: "" }
       : { status: 0, stdout: `LoadState=loaded\nActiveState=${supervisionState}\nMainPID=${supervisionState === "active" ? 321 : 0}\n`, stderr: "" } };
   const homeDeps: UpdateRestartHomeDeps = { record: { platform, paths: () => [record], definitionPath: () => definition }, supervision };
@@ -90,10 +90,10 @@ test("drift during the async runtime-readiness wait refuses synchronously before
 test("retained PID-bound manager probe timeout refuses before any stop POST", async () => {
   for (const platform of ["darwin", "linux"] as const) {
     const s = fixture(platform); let probes = 0;
-    s.validator.supervision = { ...s.supervision, run: (command, args, budget) => {
+    s.validator.supervision = { ...s.supervision, run: (command, args, budget, env) => {
       expect(budget).toBe(2000);
       if (++probes > (platform === "darwin" ? 2 : 1)) throw new Error("timeout");
-      return s.supervision.run!(command, args, budget);
+      return s.supervision.run!(command, args, budget, env);
     } };
     expect(await runUpdateRestart(s.candidate, 5000, s.io)).toEqual({ ok: false, code: "update_restart_eligibility_failed", reason: "unverifiable_ancestry" });
     expect(s.calls.stops).toBe(0); expect(s.calls.spawns).toBe(0);
@@ -150,12 +150,12 @@ test("record rewrite during bounded supervision or retained manager evidence ref
     const s = fixture(); let probes = 0;
     if (phase === "home-probe") {
       const run = s.supervision.run!;
-      s.supervision.run = (command, args, budget) => { s.drift(); return run(command, args, budget); };
+      s.supervision.run = (command, args, budget, env) => { s.drift(); return run(command, args, budget, env); };
     } else {
       const run = s.supervision.run!;
-      s.validator.supervision = { ...s.supervision, run: (command, args, budget) => {
+      s.validator.supervision = { ...s.supervision, run: (command, args, budget, env) => {
         if (++probes === 3) s.drift();
-        return run(command, args, budget);
+        return run(command, args, budget, env);
       } };
     }
     expect((await runUpdateRestart(s.candidate, 5000, s.io)).ok).toBe(false);
@@ -166,17 +166,17 @@ test("record rewrite during bounded supervision or retained manager evidence ref
 test("retained systemd evidence cannot relax MainPID-zero or remaining-deadline admission", async () => {
   for (const output of ["LoadState=not-found\nActiveState=inactive\nMainPID=321", "LoadState=not-found\nActiveState=inactive", "LoadState=loaded\nActiveState=activating\nMainPID=0"]) {
     const s = fixture("linux"); let probes = 0;
-    s.validator.supervision = { ...s.supervision, run: (command, args, budget) => {
+    s.validator.supervision = { ...s.supervision, run: (command, args, budget, env) => {
       if (++probes === 2) return { status: 0, stdout: output, stderr: "" };
-      return s.supervision.run!(command, args, budget);
+      return s.supervision.run!(command, args, budget, env);
     } };
     expect(await runUpdateRestart(s.candidate, 5000, s.io)).toEqual({ ok: false, code: "update_restart_eligibility_failed", reason: "unverifiable_ancestry" });
     expect(s.calls.stops).toBe(0); expect(s.calls.spawns).toBe(0);
   }
   const s = fixture("linux"); let now = 1000; let probes = 0;
-  s.validator.supervision = { ...s.supervision, now: () => now, run: (command, args, budget) => {
+  s.validator.supervision = { ...s.supervision, now: () => now, run: (command, args, budget, env) => {
     probes++; now = 5000;
-    return s.supervision.run!(command, args, budget);
+    return s.supervision.run!(command, args, budget, env);
   } };
   expect((await runUpdateRestart(s.candidate, 5000, s.io)).ok).toBe(false);
   expect(probes).toBe(1); expect(s.calls.stops).toBe(0); expect(s.calls.spawns).toBe(0);
@@ -193,13 +193,79 @@ test("child deadline is rechecked after slow admission evidence before bind or p
 });
 test("parent home guard rechecks the deadline after its final fingerprint capture", () => {
   const s = fixture(); let now = 1000; let probes = 0; let probed = false;
-  s.homeDeps.supervision = { ...s.supervision, now: () => now, run: (command, args, budget) => {
+  s.homeDeps.supervision = { ...s.supervision, now: () => now, run: (command, args, budget, env) => {
     if (++probes === 2) probed = true;
-    return s.supervision.run!(command, args, budget);
+    return s.supervision.run!(command, args, budget, env);
   } };
-  s.homeDeps.record!.read = fd => {
+  s.homeDeps.record!.read = (fd, buffer, offset, length, position) => {
     if (probed) now = 5000;
-    return readFileSync(fd);
+    return readSync(fd, buffer, offset, length, position);
   };
   expect(() => assertUpdateRestartHome(s.home, 5000, s.homeDeps)).toThrow("update_restart_deadline_expired");
+});
+
+
+test("PATH manager shim cannot authorize stopping or spawning when trusted systemd is active", async () => {
+  const s = fixture("linux"); const commands: string[] = [];
+  const inactive = "LoadState=loaded\nActiveState=inactive\nMainPID=0\n";
+  writeFileSync(join(s.root, "systemctl"), "#!/bin/sh\nprintf 'LoadState=loaded\\nActiveState=inactive\\nMainPID=0\\n'\n", { mode: 0o755 });
+  s.supervision.environment = { PATH: s.root };
+  s.supervision.stat = () => ({ isFile: () => true, mode: 0o100755 });
+  s.supervision.run = command => {
+    commands.push(command);
+    return { status: 0, stdout: command === "systemctl" ? inactive : "LoadState=loaded\nActiveState=active\nMainPID=321\n", stderr: "" };
+  };
+  expect((await runUpdateRestart(s.candidate, 5000, s.io)).ok).toBe(false);
+  expect(commands).toEqual(["/usr/bin/systemctl"]);
+  expect(s.calls.stops).toBe(0); expect(s.calls.spawns).toBe(0);
+});
+
+test("descriptor substitution and oversized records refuse before lifecycle side effects", async () => {
+  for (const failure of ["descriptor", "oversized"] as const) {
+    const s = fixture(); let reads = 0;
+    if (failure === "descriptor") {
+      s.homeDeps.record!.fstat = fd => ({ ...fstatSync(fd, { bigint: true }), ino: 0n, isFile: () => true });
+      s.homeDeps.record!.read = () => { reads++; throw new Error("read must not happen"); };
+    } else writeFileSync(s.record, JSON.stringify({ ...s.state, padding: "x".repeat(1024 * 1024) }));
+    expect((await runUpdateRestart(s.candidate, 5000, s.io)).ok).toBe(false);
+    expect(reads).toBe(0); expect(s.calls.stops).toBe(0); expect(s.calls.spawns).toBe(0);
+  }
+});
+
+test("SSH user-bus discovery reaches every parent and child systemd probe without env mutation", async () => {
+  const s = fixture("linux"); const environment = { PATH: "/fixture/bin", DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/bus" };
+  let probes = 0;
+  const run = s.supervision.run!;
+  Object.assign(s.supervision, { environment, uid: 42, exists: (path: string) => path === "/run/user/42" });
+  s.supervision.run = (command, args, budget, env) => {
+    probes++;
+    expect(env).toEqual({ ...environment, XDG_RUNTIME_DIR: "/run/user/42" });
+    expect(command).toBe("/usr/bin/systemctl");
+    return run(command, args, budget, env);
+  };
+  expect((await runUpdateRestart(s.candidate, 5000, s.io)).ok).toBe(true);
+  const parentProbes = probes;
+  const marker = { home: s.home, version: "2.77.0", port: 23456, hostname: "127.0.0.1", deadlineAt: 5000 };
+  const guard = admitUpdateRestartChild(["start", "--port", "23456"], { env: { [UPDATE_RESTART_CHILD_ENV]: JSON.stringify(marker) }, now: () => 1000,
+    version: () => "2.77.0", checkHome: home => assertUpdateRestartHome(home, 5000, s.homeDeps), checkState: () => {},
+    acquire: () => ({ release() {} }), onExit: () => {}, armDeadline: () => () => {},
+  })!;
+  for (let i = 0; i < 4; i++) guard.check();
+  guard.complete();
+  expect(parentProbes).toBeGreaterThan(0); expect(probes - parentProbes).toBe(7);
+  expect(environment).toEqual({ PATH: "/fixture/bin", DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/bus" });
+});
+
+
+test("standalone reuses the resolved manager path for its retained PID-bound probe", () => {
+  for (const platform of ["darwin", "linux"] as const) {
+    const s = fixture(platform); const commands: string[] = []; let resolutions = 0;
+    s.validator.supervision = { ...s.supervision, stat: path => {
+      resolutions++;
+      return { isFile: () => true, mode: platform === "linux" && path === "/usr/bin/systemctl" ? 0o100777 : 0o100755 };
+    }, run: (command, args, budget, env) => { commands.push(command); return s.supervision.run!(command, args, budget, env); } };
+    expect(standalone(s.candidate.target, 5000, s.validator)).toBe(true);
+    expect(resolutions).toBe(platform === "darwin" ? 1 : 2);
+    expect(commands).toEqual(Array(platform === "darwin" ? 4 : 2).fill(platform === "darwin" ? "/bin/launchctl" : "/bin/systemctl"));
+  }
 });

@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { statSync, type Stats } from "node:fs";
+import { systemdUserBusEnvironment } from "../service/systemd";
 import { assertLiveServiceManagerAllowed } from "../service/guards";
 import { LABEL, TASK } from "../service/state";
 
@@ -8,15 +10,18 @@ export interface UpdateRestartSupervisionDeps {
   platform?: NodeJS.Platform;
   now?: () => number;
   uid?: number;
-  run?: (command: string, args: string[], timeoutMs: number) => UpdateRestartSupervisorReply;
+  stat?: (path: string) => Pick<Stats, "isFile" | "mode">;
+  environment?: NodeJS.ProcessEnv;
+  exists?: (path: string) => boolean;
+  run?: (command: string, args: string[], timeoutMs: number, environment: NodeJS.ProcessEnv) => UpdateRestartSupervisorReply;
 }
 const PROBE_TIMEOUT_MS = 2000;
 export const UPDATE_RESTART_SYSTEMD_ARGS = ["--user", "show", "-p", "LoadState", "-p", "ActiveState", "-p", "MainPID", "-p", "FragmentPath", "-p", "NeedDaemonReload", TASK];
 
-function run(command: string, args: string[], timeout: number): UpdateRestartSupervisorReply {
+function run(command: string, args: string[], timeout: number, env: NodeJS.ProcessEnv): UpdateRestartSupervisorReply {
   assertLiveServiceManagerAllowed("update restart supervision");
   try {
-    return { status: 0, stdout: execFileSync(command, args, { encoding: "utf8", timeout,
+    return { status: 0, stdout: execFileSync(command, args, { encoding: "utf8", timeout, env,
       killSignal: "SIGKILL", maxBuffer: 64 * 1024, stdio: ["ignore", "pipe", "pipe"] }), stderr: "" };
   } catch (error) {
     const failure = error as { status?: number | null; signal?: string; code?: string; stdout?: Buffer; stderr?: Buffer };
@@ -25,24 +30,41 @@ function run(command: string, args: string[], timeout: number): UpdateRestartSup
   }
 }
 
+/** Ignore PATH; usr-merged systemctl symlinks may resolve to a regular trusted-location target. */
+export function resolveUpdateRestartSupervisor(deps: UpdateRestartSupervisionDeps = {}): string | null {
+  const platform = deps.platform ?? process.platform;
+  const paths = platform === "linux" ? ["/usr/bin/systemctl", "/bin/systemctl"] : platform === "darwin" ? ["/bin/launchctl"] : [];
+  for (const path of paths) {
+    try {
+      const stat = (deps.stat ?? statSync)(path);
+      if (stat.isFile() && (stat.mode & 0o002) === 0 && (stat.mode & 0o111) !== 0) return path;
+    } catch { /* Try the next trusted location; no PATH fallback. */ }
+  }
+  return null;
+}
+
 /** All manager evidence shares the transaction deadline, including the retained PID-bound probe. */
 export function runBoundedUpdateRestartSupervisor(command: string, args: string[], deadlineAt: number, deps: UpdateRestartSupervisionDeps = {}) {
   const now = deps.now ?? Date.now;
   const remaining = deadlineAt - now();
   if (!Number.isFinite(remaining) || remaining <= 0) throw new Error("update_restart_supervision_unverified");
-  const result = (deps.run ?? run)(command, args, Math.min(PROBE_TIMEOUT_MS, remaining));
+  const environment = (deps.platform ?? process.platform) === "linux"
+    ? systemdUserBusEnvironment(deps.environment ?? process.env, { uid: deps.uid, exists: deps.exists })
+    : { ...(deps.environment ?? process.env) };
+  const result = (deps.run ?? run)(command, args, Math.min(PROBE_TIMEOUT_MS, remaining), environment);
   if (now() >= deadlineAt) throw new Error("update_restart_supervision_unverified");
   return result;
 }
 
 /** Registration presence is independent of liveness; only positive inactivity admits. */
-export function probeUpdateRestartSupervision(deadlineAt: number, deps: UpdateRestartSupervisionDeps = {}): UpdateRestartSupervision {
+export function probeUpdateRestartSupervision(deadlineAt: number, deps: UpdateRestartSupervisionDeps = {}, command = resolveUpdateRestartSupervisor(deps)): UpdateRestartSupervision {
   const platform = deps.platform ?? process.platform;
+  if (!command) return "unknown";
   if (platform === "darwin") {
     const uid = deps.uid ?? process.getuid?.() ?? 0;
     const states = [`gui/${uid}/${LABEL}`, `user/${uid}/${LABEL}`].map(target => {
       try {
-        const result = runBoundedUpdateRestartSupervisor("/bin/launchctl", ["print", target], deadlineAt, deps);
+        const result = runBoundedUpdateRestartSupervisor(command, ["print", target], deadlineAt, deps);
         return result.status === 112 || result.status === 113 ? "inactive" : result.status === 0 ? "active" : "unknown";
       } catch { return "unknown"; }
     });
@@ -50,7 +72,7 @@ export function probeUpdateRestartSupervision(deadlineAt: number, deps: UpdateRe
   }
   if (platform === "linux") {
     try {
-      const result = runBoundedUpdateRestartSupervisor("systemctl", UPDATE_RESTART_SYSTEMD_ARGS, deadlineAt, deps);
+      const result = runBoundedUpdateRestartSupervisor(command, UPDATE_RESTART_SYSTEMD_ARGS, deadlineAt, deps);
       return classifyUpdateRestartSystemdSupervision(result);
     } catch { return "unknown"; }
   }
