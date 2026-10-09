@@ -26,6 +26,7 @@ import { refreshConfigDerivedRegistries } from "./derived-registries";
 import { type OcxClaudeCodeConfig, type OcxConfig } from "../types";
 import {
   agentTaskRecoverySchema,
+  asideProfileSyncSchema,
   catalogAutoRefreshSchema,
   clientConnectionSchema,
   isUsableApiKeySecret,
@@ -131,6 +132,11 @@ export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxCon
   warnDegradedStreamMode(rawParsed, validated);
   warnDegradedCompactionRouting(rawParsed, validated);
   warnDegradedMemoryModels(rawParsed, validated);
+  // The schema replaces a malformed policy with { allProfiles: false }, which silently turns every Aside profile off (#6757).
+  const asidePolicy = rawParsed && typeof rawParsed === "object" ? (rawParsed as Record<string, unknown>).asideProfileSync : undefined;
+  if (asidePolicy !== undefined && !asideProfileSyncSchema.safeParse(asidePolicy).success) {
+    console.warn("⚠️  config.json asideProfileSync is invalid — Aside profile sync falls back to all profiles off; fix the block or inspect `ocx integration client status --client aside`");
+  }
 }
 
 /**

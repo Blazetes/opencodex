@@ -477,7 +477,7 @@ connection defaults all profiles on; explicit per-profile changes materialize th
 pin one legacy root owner before changing it. Sibling stores remain independent. Policy saves
 precede coordinated writes under one scoped flight, and actual file state/refusals remain
 separate. Restore reconciles target intent from validated snapshot ownership without changing
-sibling policy. Profile journal views retain source-store provenance for older legacy entries.
+sibling policy. Profile journal views retain source-store provenance for older legacy entries. A profile that is off beside a stale block is never re-enabled automatically; the CLI names its preview-then-enable recovery (`src/cli/aside-profile-recovery.ts`), and a malformed policy that falls back to all-off produces a load-time warning.
 
 The shared atomic replacement publisher also identifies explicit Remote Workspace file writes as `remote-workspace`; its isolated owner and support limits are documented in [Remote Workspace](../remote-workspace.md).
 

@@ -532,6 +532,14 @@ per-profile refusal, residual and separately labeled redacted backup information
 inspect the affected profile before retrying. This refresh is separate from each
 profile's preview/bound mutation workflow.
 
+Sync refreshes only profiles whose sync preference is on, so an empty result is not a failure.
+If `ocx integration client status --client aside` shows a profile as `off (stale)`, status
+prints the commands to reconnect it: review `ocx integration client preview --client aside
+--operation apply --profile N`, and run `ocx integration client enable --client aside --profile N`
+only if the preview permits the change and you accept it. Nothing is re-enabled automatically.
+A malformed `asideProfileSync` block in `config.json` turns every profile off and logs a
+warning when the config loads.
+
 Each profile has separate ownership and history. Existing user edits, unsafe paths and linked
 catalogs are refused; the existing explicit overwrite and drift-confirmation controls remain
 available. Fully quit and reopen Aside to load changed model files.
