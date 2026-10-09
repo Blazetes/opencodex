@@ -36,3 +36,19 @@ unless the review finds a defect.
 - Reviewer verdict PASS (or FAIL folded via carry and re-reviewed PASS).
 - Union structure:check exit 0 (activation: the 600-line budget is exactly hit; a 601st line would fail).
 - Final report lists #6734 as READY (original) or the carry PR, and nothing to close until merge.
+
+## Cycle revision (wp1 P, origin/dev bb36029ef9)
+
+The facts above were observed at dev `730d898457` and are historical. dev moved one commit (#6820, Codex home
+restore; it touches none of the ten files). This cycle replaces "already run" with fresh checks:
+
+- **W1 union.** In the lane worktree, create the unpublished branch `n5-union-6734` from origin/dev `bb36029ef9` and
+  `git merge --no-ff refs/remotes/pr/6734` (head `ca2391373f`). Record parents, union commit and tree in 011. A conflict
+  switches to the carry path. The branch is never pushed.
+- **W2 review.** The independent gpt-6.1-sol review (reviewer 01a1205e, no builder context) is bound to the PR head and
+  current dev; its verdict, findings and limitations go to `011_pr6734_review.md` on `codex/n5-small`.
+- **W3 checks.** Session source is the lane worktree; C runs `cxc receipt test` with the union branch checked out:
+  the two root test files, the two GUI test files, `bun run typecheck`, `bun run structure:check`. 011 is committed on
+  `codex/n5-small` after switching back, so the doc commit is never confused with the tested tree.
+- **W4 READY.** Original READY additionally requires a fresh read of the PR's exact-head checks, review threads and
+  mergeability at report time; an unchanged head alone does not refresh that evidence.
