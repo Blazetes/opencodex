@@ -47,7 +47,7 @@
   "cli-update-restart-child.test.ts": "cli",
   "cli-update-restart-transport.test.ts": "cli",
   "cli-update-restart-home.test.ts": "cli",
-    "cli-update-restart-service-record.test.ts": "cli", "cli-update-restart-supervision.test.ts": "cli", "cli-update-restart-admission.test.ts": "cli",
+    "cli-update-restart-service-record.test.ts": "cli", "cli-update-restart-supervision.test.ts": "cli", "cli-update-restart-admission.test.ts": "cli", "cli-update-restart-desktop-service.test.ts": "cli",
   "codex-shim-overlay.test.ts": "codex-integration",
   "codex-shim-migration.test.ts": "codex-integration",
   "codex-shim-overlay-transaction.test.ts": "codex-integration",
