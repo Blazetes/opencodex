@@ -27,14 +27,17 @@ test("captures absence, authority position and parses ownership from the capture
   expect(() => assertUpdateRestartServiceRecord(installed.serviceRecord, s.deps)).toThrow("update_restart_home_changed");
 });
 test("same revision provenance, same-size restored-mtime edit and identical-byte replacement refuse", () => {
-  for (const edit of ["provenance", "mtime", "replace", "mode", "definition"] as const) {
-    const s = setup(); const raw = JSON.stringify(s.state); writeFileSync(s.authority, raw); chmodSync(s.authority, 0o644); writeFileSync(s.definition, "definition-a");
+  for (const edit of ["provenance", "mtime", "replace", "mode", "definition", "create-definition", "delete-definition"] as const) {
+    const s = setup(); const raw = JSON.stringify(s.state); writeFileSync(s.authority, raw); chmodSync(s.authority, 0o644);
+    if (edit !== "create-definition") writeFileSync(s.definition, "definition-a");
     const before = lstatSync(s.authority); const captured = captureUpdateRestartServiceRecord(s.deps);
     if (edit === "provenance") writeFileSync(s.authority, raw.replace("bun-a", "bun-b"));
     if (edit === "mtime") { writeFileSync(s.authority, raw.replace("bun-a", "bun-b")); utimesSync(s.authority, before.atime, before.mtime); }
     if (edit === "replace") { writeFileSync(s.authority + ".next", raw); renameSync(s.authority + ".next", s.authority); }
     if (edit === "mode") chmodSync(s.authority, 0o600);
     if (edit === "definition") writeFileSync(s.definition, "definition-b");
+    if (edit === "create-definition") writeFileSync(s.definition, "definition-a");
+    if (edit === "delete-definition") unlinkSync(s.definition);
     expect(() => assertUpdateRestartServiceRecord(captured.serviceRecord, s.deps)).toThrow("update_restart_home_changed");
   }
 });

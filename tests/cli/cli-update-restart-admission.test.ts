@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertUpdateRestartHome, readUpdateRestartHome, type UpdateRestartHomeDeps } from "../../src/cli/update-restart-home";
@@ -21,13 +21,17 @@ function fixture(platform: "darwin" | "linux" = "darwin") {
   process.env.OPENCODEX_HOME = config; process.env.CODEX_HOME = codex;
   writeFileSync(join(config, "config.json"), JSON.stringify({ hostname: "127.0.0.1" }));
   const record = join(config, "service-state.json");
+  const definition = join(root, "definition");
+  writeFileSync(definition, platform === "darwin"
+    ? '<plist version="1.0"><dict><key>Label</key><string>com.opencodex.proxy</string></dict></plist>'
+    : '[Unit]\nDescription=fixture\n[Service]\nExecStart=/fixture/ocx start --port 23456\n');
   const state = { version: 2, backend: "scheduler", codexHome: codex, opencodexHome: config, revision: 1, bunPath: "/fixture/bun-a" };
   writeFileSync(record, JSON.stringify(state));
   let supervisionState = "inactive";
   const supervision: UpdateRestartSupervisionDeps = { platform, now: () => 1000,
     run: () => platform === "darwin" ? { status: supervisionState === "inactive" ? 113 : supervisionState === "active" ? 0 : 5, stdout: "", stderr: "" }
       : { status: 0, stdout: `LoadState=loaded\nActiveState=${supervisionState}\nMainPID=${supervisionState === "active" ? 321 : 0}\n`, stderr: "" } };
-  const homeDeps: UpdateRestartHomeDeps = { record: { platform, paths: () => [record], definitionPath: () => join(root, "definition") }, supervision };
+  const homeDeps: UpdateRestartHomeDeps = { record: { platform, paths: () => [record], definitionPath: () => definition }, supervision };
   const home = readUpdateRestartHome(homeDeps);
   const target: UpdateRestartCandidate["target"] = { pid: 123, port: 23456, hostname: "127.0.0.1", source: "runtime", version: "2.76.0" };
   const candidate: UpdateRestartCandidate = { home, target, runtime: { pid: 123, port: 23456, hostname: "127.0.0.1", attestationSecret: "a".repeat(43) }, cliVersion: "2.77.0" };
@@ -176,4 +180,26 @@ test("retained systemd evidence cannot relax MainPID-zero or remaining-deadline 
   } };
   expect((await runUpdateRestart(s.candidate, 5000, s.io)).ok).toBe(false);
   expect(probes).toBe(1); expect(s.calls.stops).toBe(0); expect(s.calls.spawns).toBe(0);
+});
+
+test("child deadline is rechecked after slow admission evidence before bind or publication", () => {
+  const s = fixture(); let now = 1000; let acquired = 0;
+  const marker = { home: s.home, version: "2.77.0", port: 23456, hostname: "127.0.0.1", deadlineAt: 5000 };
+  expect(() => admitUpdateRestartChild(["start", "--port", "23456"], { env: { [UPDATE_RESTART_CHILD_ENV]: JSON.stringify(marker) }, now: () => now, version: () => "2.77.0",
+    checkHome: () => {}, checkState: () => { now = 5000; },
+    acquire: () => { acquired++; return { release() {} }; },
+  })).toThrow("update_restart_deadline_expired");
+  expect(acquired).toBe(0);
+});
+test("parent home guard rechecks the deadline after its final fingerprint capture", () => {
+  const s = fixture(); let now = 1000; let probes = 0; let probed = false;
+  s.homeDeps.supervision = { ...s.supervision, now: () => now, run: (command, args, budget) => {
+    if (++probes === 2) probed = true;
+    return s.supervision.run!(command, args, budget);
+  } };
+  s.homeDeps.record!.read = fd => {
+    if (probed) now = 5000;
+    return readFileSync(fd);
+  };
+  expect(() => assertUpdateRestartHome(s.home, 5000, s.homeDeps)).toThrow("update_restart_deadline_expired");
 });

@@ -45,6 +45,7 @@ export function assertUpdateRestartHome(expected: UpdateRestartHome, deadlineAt 
   try {
     if (JSON.stringify(readUpdateRestartHome(deps)) !== JSON.stringify(expected)) throw new Error("changed");
   } catch { throw new Error("update_restart_home_changed"); }
+  if ((deps.supervision?.now ?? Date.now)() >= deadlineAt) throw new Error("update_restart_deadline_expired");
 }
 
 /** Read-only eligibility shared by parent pre-stop and child admission. */

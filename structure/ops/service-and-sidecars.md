@@ -51,6 +51,44 @@ without running handlers is not covered by this forwarding mechanism.
 
 > Decision record: [ADR-0028](../decisions/ADR-0028-background-service-command-selection.md)
 
+## Guarded CLI update restart
+
+`src/cli/system-restart-client.ts` freezes the newer-CLI candidate's runtime identity and
+physical homes. `src/cli/update-restart-home.ts` captures the service-record digest from
+`src/cli/update-restart-service-record.ts`: all ordered `serviceStatePaths()` candidates,
+including confirmed absences and the authoritative position, plus the launchd plist or
+systemd unit. State and ownership resolve from those captured bytes. Each present regular
+file contributes SHA-256 content and bigint device, inode, size, nanosecond mtime/ctime,
+mode, uid and gid. Descriptor stats bracket the read; a final pathname stat must agree.
+Symlinks, inconsistent reads, malformed state, unreadable candidates and membership drift
+refuse. Canonical directory aliases remain equivalent. Lock, PID and runtime records are excluded.
+
+`src/cli/update-restart.ts` requires known versions and a detached POSIX target with PID-1
+parent, no ownership claim and no client/sibling role. An installed record without a claim
+admits only with positively inactive supervision. `src/cli/update-restart-supervision.ts`
+probes both launchd domains even without a plist; only exit 112/113 establishes absence.
+Systemd requires loaded or not-found, inactive and MainPID zero. Unknown evidence refuses.
+Each command, including the retained PID-bound manager check, uses at most two seconds
+and the remaining transaction deadline, which is checked again after execution.
+
+The ownership mutation lease covers stop and the single spawn. Every parent `checkHome`
+recaptures the original fingerprint and supervision: after acquisition, immediately before
+stop, after shutdown, after the async Bun-readiness wait, before spawn and throughout
+replacement observation, including success publication. Drift is terminal, never recaptured
+as a new baseline. The executable must pass `REAL_BUN_MIN_BYTES` before stop; after a
+confirmed shutdown it may wait within the same deadline before repeating launch checks.
+`src/cli/update-restart-transport.ts` attests and stops on one direct TCP connection without
+reconnect, PID signals or port reclamation. Predecessor exit, runtime-record removal, port
+availability and definitive endpoint absence precede spawn. Success requires the child PID,
+endpoint, fresh attestation and exact known version, without generic restart recovery.
+
+`src/cli/update-restart-child.ts` requires marker schema 1 and a 64-character lowercase hex
+digest before preflight or lease acquisition. It strips parent lease delegation and takes
+its own lease, validating the frozen homes, digest, supervision, version, endpoint and
+deadline before and under that lease, before/after bind, before PID and runtime publication,
+and at completion. Rollback retains custody until exit; the deadline ends an unfinished child.
+Windows, claimed, supervised and uncertain targets remain ineligible for this update path.
+
 ## Windows npm tray update badge
 
 The npm Windows tray owns six installed ICOs: online, warning, and offline base safety glyphs plus one blue-dot variant of each. Its hidden `ocx __update-badge` child reads the package cache without refreshing or writing it. The tray samples no more often than every 60 seconds, caps stdout and stderr at 16 KiB each, requests termination after 12 seconds or a pipe overflow, and reaps the child on later Windows Forms ticks before allowing another launch. A successful badge observation expires after 180 seconds; failed reads do not extend it. The **Update available** item opens the dashboard and never installs a package. Shutdown requests child termination, waits at most 500 ms, and disposes the probe before tray UI disposal.

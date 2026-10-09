@@ -66,6 +66,7 @@ export function admitUpdateRestartChild(argv: string[], io: UpdateRestartChildIo
         throw new Error("update_restart_competing_runtime");
       }
     }))(marker);
+    if (now() >= marker.deadlineAt) throw new Error("update_restart_deadline_expired");
   };
   check();
   const lease = (io.acquire ?? (waitMs => acquireOwnershipMutationLease(serviceStatePaths(), { waitMs })))(Math.min(2000, marker.deadlineAt - now()));
