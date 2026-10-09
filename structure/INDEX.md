@@ -95,6 +95,7 @@ Background service, docs, release, and design discipline.
 | Doc | Scope |
 | --- | --- |
 | [`desktop-shell.md`](desktop-shell.md) | Tauri desktop shell, proxy attachment and sidecar lifecycle, tray controls, bootstrap navigation, and desktop companion presence. |
+| [`desktop-terminal-command.md`](desktop-terminal-command.md) | Desktop-owned ocx command on PATH: record and journal, POSIX shim and shell blocks, Windows user Path, private-path ACL policy, and the local Terminal command page. |
 | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) | Service install/repair, platform launchers, tray, and sidecar processes. |
 | [`ops/plugins.md`](ops/plugins.md) | Plugin loading from OPENCODEX_HOME/plugins and the upstream rewrite slot plugins attach to. |
 | [`ops/docs-and-release.md`](ops/docs-and-release.md) | Docs site, workflow map, branch policy, release flow, and cross-platform CI. |
@@ -113,6 +114,12 @@ A source area can be described by more than one doc, because these docs are orga
 | `app/` | [`overview.md`](overview.md)<br>[`companion.md`](companion.md) |
 | `bin/` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `desktop/` | [`desktop-shell.md`](desktop-shell.md)<br>[`companion.md`](companion.md) |
+| `desktop/src-tauri/src/cli_command.rs` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
+| `desktop/src-tauri/src/cli_command_posix.rs` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
+| `desktop/src-tauri/src/cli_command_record.rs` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
+| `desktop/src-tauri/src/cli_command_windows.rs` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
+| `desktop/ui/cli.html` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
+| `desktop/ui/cli.js` | [`desktop-terminal-command.md`](desktop-terminal-command.md) |
 | `docs-site/` | [`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `gui/` | [`overview.md`](overview.md)<br>[`gui-and-management-api.md`](gui-and-management-api.md)<br>[`dashboard-and-usage.md`](dashboard-and-usage.md)<br>[`design-methodology.md`](design-methodology.md)<br>[`companion.md`](companion.md) |
 | `scripts/` | [`overview.md`](overview.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
