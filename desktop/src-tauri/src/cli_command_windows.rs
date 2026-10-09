@@ -8,15 +8,16 @@ use std::path::Path;
 #[cfg(windows)]
 pub(crate) mod private_acl {
     use super::*;
-    use std::{
-        ffi::c_void,
-        os::windows::ffi::OsStrExt,
-        process::{Command, Stdio},
-        ptr,
-        time::{Duration, Instant},
-    };
+    use std::{ffi::c_void, os::windows::ffi::OsStrExt, ptr};
     type Ptr = *mut c_void;
     const UNSAFE: &str = "private-acl-unsafe";
+    const ACL_REVISION: u32 = 2;
+    const FULL_CONTROL: u32 = 0x1f01ff;
+    const OBJECT_INHERIT_ACE: u32 = 0x1;
+    const CONTAINER_INHERIT_ACE: u32 = 0x2;
+    const SE_FILE_OBJECT: u32 = 1;
+    const DACL_SECURITY_INFORMATION: u32 = 4;
+    const PROTECTED_DACL_SECURITY_INFORMATION: u32 = 0x80000000;
     #[repr(C)]
     struct Acl {
         revision: u8,
@@ -48,7 +49,24 @@ pub(crate) mod private_acl {
             size: u32,
             needed: *mut u32,
         ) -> i32;
-        fn ConvertSidToStringSidW(sid: Ptr, out: *mut *mut u16) -> i32;
+        fn CreateWellKnownSid(kind: u32, domain: Ptr, sid: Ptr, size: *mut u32) -> i32;
+        fn InitializeAcl(acl: *mut Acl, size: u32, revision: u32) -> i32;
+        fn AddAccessAllowedAceEx(
+            acl: *mut Acl,
+            revision: u32,
+            flags: u32,
+            mask: u32,
+            sid: Ptr,
+        ) -> i32;
+        fn SetNamedSecurityInfoW(
+            name: *mut u16,
+            kind: u32,
+            info: u32,
+            owner: Ptr,
+            group: Ptr,
+            dacl: *mut Acl,
+            sacl: *mut Acl,
+        ) -> u32;
         fn GetNamedSecurityInfoW(
             name: *const u16,
             kind: u32,
@@ -218,77 +236,67 @@ pub(crate) mod private_acl {
         }
         Ok(())
     }
-    fn icacls(path: &Path, args: &[String]) -> Result<()> {
-        let system = std::env::var("SystemRoot").map_err(|_| UNSAFE)?;
-        let b = system.as_bytes();
-        if b.len() < 3
-            || !b[0].is_ascii_alphabetic()
-            || b[1] != b':'
-            || !matches!(b[2], b'/' | b'\\')
-            || system.contains(['\0', '\r', '\n'])
-            || system.split(['/', '\\']).any(|s| matches!(s, "." | ".."))
+    fn well_known_sid(kind: u32) -> Result<[u32; 17]> {
+        // SECURITY_MAX_SID_SIZE is 68 bytes. Caller-owned, DWORD-aligned storage
+        // needs no LocalFree/FreeSid and remains alive while building the ACL.
+        let mut sid = [0u32; 17];
+        let mut size = std::mem::size_of_val(&sid) as u32;
+        if unsafe { CreateWellKnownSid(kind, ptr::null_mut(), sid.as_mut_ptr().cast(), &mut size) }
+            == 0
         {
             return Err(UNSAFE.into());
         }
-        let exe = Path::new(&system).join("System32/icacls.exe");
-        let mut child = Command::new(exe)
-            .arg(path)
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|_| UNSAFE)?;
-        let start = Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    return if status.success() {
-                        Ok(())
-                    } else {
-                        Err(UNSAFE.into())
-                    }
-                }
-                Ok(None) if start.elapsed() < Duration::from_secs(10) => {
-                    std::thread::sleep(Duration::from_millis(20))
-                }
-                _ => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(UNSAFE.into());
-                }
+        Ok(sid)
+    }
+    fn allowed_acl(sids: &[Ptr], flags: u32) -> Result<Vec<u32>> {
+        let size = std::mem::size_of::<Acl>() as u32
+            + sids
+                .iter()
+                .map(|sid| 8 + unsafe { GetLengthSid(*sid) })
+                .sum::<u32>();
+        let mut buffer = vec![0u32; (size as usize).div_ceil(std::mem::size_of::<u32>())];
+        let acl = buffer.as_mut_ptr().cast::<Acl>();
+        if unsafe { InitializeAcl(acl, size, ACL_REVISION) } == 0 {
+            return Err(UNSAFE.into());
+        }
+        for sid in sids {
+            if unsafe { AddAccessAllowedAceEx(acl, ACL_REVISION, flags, FULL_CONTROL, *sid) } == 0 {
+                return Err(UNSAFE.into());
             }
         }
+        Ok(buffer)
     }
     pub fn harden(path: &Path, directory: bool) -> Result<()> {
         let user = user()?;
-        let mut raw = ptr::null_mut();
-        let code = unsafe { ConvertSidToStringSidW(user[0] as Ptr, &mut raw) };
-        let sid = Local(raw.cast());
-        if code == 0 || sid.0.is_null() {
-            return Err(UNSAFE.into());
-        }
-        let mut len = 0;
-        while len < 256 && unsafe { *raw.add(len) } != 0 {
-            len += 1;
-        }
-        if len == 256 {
-            return Err(UNSAFE.into());
-        }
-        let sid_text = String::from_utf16(unsafe { std::slice::from_raw_parts(raw, len) })
-            .map_err(|_| UNSAFE)?;
-        let grant = format!("*{sid_text}:{}F", if directory { "(OI)(CI)" } else { "" });
-        icacls(path, &["/grant:r".into(), grant])?;
-        icacls(path, &["/inheritance:r".into()])?;
-        icacls(
-            path,
+        let mut system = well_known_sid(22)?; // WinLocalSystemSid
+        let mut admins = well_known_sid(26)?; // WinBuiltinAdministratorsSid
+        let mut acl = allowed_acl(
             &[
-                "/remove".into(),
-                "*S-1-1-0".into(),
-                "*S-1-5-11".into(),
-                "*S-1-5-32-545".into(),
+                user[0] as Ptr,
+                system.as_mut_ptr().cast(),
+                admins.as_mut_ptr().cast(),
             ],
+            if directory {
+                OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
+            } else {
+                0
+            },
         )?;
+        let mut name = wide(path)?;
+        if unsafe {
+            SetNamedSecurityInfoW(
+                name.as_mut_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                acl.as_mut_ptr().cast(),
+                ptr::null_mut(),
+            )
+        } != 0
+        {
+            return Err(UNSAFE.into());
+        }
         verify(path, directory)
     }
     #[cfg(test)]
@@ -297,17 +305,68 @@ pub(crate) mod private_acl {
         use crate::cli_command_record::{self as record, tests::Temp, Store};
         #[link(name = "advapi32")]
         unsafe extern "system" {
-            fn InitializeAcl(acl: *mut Acl, size: u32, revision: u32) -> i32;
             fn AddAccessAllowedAce(acl: *mut Acl, revision: u32, mask: u32, sid: Ptr) -> i32;
-            fn SetNamedSecurityInfoW(
-                name: *mut u16,
-                kind: u32,
-                info: u32,
-                owner: Ptr,
-                group: Ptr,
-                dacl: *mut Acl,
-                sacl: *mut Acl,
-            ) -> u32;
+        }
+        #[test]
+        fn harden_sets_only_three_full_control_aces_with_directory_inheritance() {
+            let t = Temp::new();
+            let root = t.0.join("root");
+            record::private_dir(&root).unwrap();
+            let file = root.join("file");
+            std::fs::write(&file, b"test").unwrap();
+            harden(&file, false).unwrap();
+            let user = user().unwrap();
+            let mut system = well_known_sid(22).unwrap();
+            let mut admins = well_known_sid(26).unwrap();
+            let sids = [
+                user[0] as Ptr,
+                system.as_mut_ptr().cast(),
+                admins.as_mut_ptr().cast(),
+            ];
+            for (path, flags) in [(&root, 0x3), (&file, 0)] {
+                let name = wide(path).unwrap();
+                let mut dacl = ptr::null_mut();
+                let mut descriptor = ptr::null_mut();
+                assert_eq!(
+                    unsafe {
+                        GetNamedSecurityInfoW(
+                            name.as_ptr(),
+                            SE_FILE_OBJECT,
+                            DACL_SECURITY_INFORMATION,
+                            ptr::null_mut(),
+                            ptr::null_mut(),
+                            &mut dacl,
+                            ptr::null_mut(),
+                            &mut descriptor,
+                        )
+                    },
+                    0
+                );
+                let descriptor = Local(descriptor);
+                assert!(!dacl.is_null());
+                let mut control = 0;
+                let mut revision = 0;
+                assert_ne!(
+                    unsafe {
+                        GetSecurityDescriptorControl(descriptor.0, &mut control, &mut revision)
+                    },
+                    0
+                );
+                assert_ne!(control & 0x1000, 0);
+                assert_eq!(unsafe { (*dacl).count }, 3);
+                for (index, sid) in sids.iter().enumerate() {
+                    let mut ace = ptr::null_mut();
+                    assert_ne!(unsafe { GetAce(dacl, index as u32, &mut ace) }, 0);
+                    let header = unsafe { &*ace.cast::<AceHeader>() };
+                    assert_eq!(header.kind, 0);
+                    assert_eq!(header.flags, flags);
+                    assert_eq!(
+                        unsafe { *ace.cast::<u8>().add(4).cast::<u32>() },
+                        FULL_CONTROL
+                    );
+                    assert_ne!(unsafe { EqualSid(ace.cast::<u8>().add(8).cast(), *sid) }, 0);
+                }
+            }
         }
         #[test]
         fn hardened_root_and_inherited_child_are_valid_after_store_reopen() {
@@ -326,7 +385,6 @@ pub(crate) mod private_acl {
         #[test]
         fn root_without_protection_is_refused_even_without_inherited_aces() {
             let t = Temp::new();
-            // icacls /grant:r replaces permissions but can retain the existing OI/CI flags.
             // Replace the temporary parent's whole DACL with one non-inheritable user ACE.
             let user = user().unwrap();
             let size =
@@ -459,7 +517,25 @@ pub(crate) mod private_acl {
             let child = s.root.join("backups/child");
             std::fs::write(&child, b"test").unwrap();
             for (path, root) in [(&s.root, true), (&child, false)] {
-                icacls(path, &["/grant".into(), "*S-1-1-0:R".into()]).unwrap();
+                let user = user().unwrap();
+                let mut everyone = well_known_sid(1).unwrap(); // WinWorldSid
+                let mut acl =
+                    allowed_acl(&[user[0] as Ptr, everyone.as_mut_ptr().cast()], 0).unwrap();
+                let mut name = wide(path).unwrap();
+                assert_eq!(
+                    unsafe {
+                        SetNamedSecurityInfoW(
+                            name.as_mut_ptr(),
+                            SE_FILE_OBJECT,
+                            DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                            ptr::null_mut(),
+                            ptr::null_mut(),
+                            acl.as_mut_ptr().cast(),
+                            ptr::null_mut(),
+                        )
+                    },
+                    0
+                );
                 assert_eq!(verify(path, root).unwrap_err(), UNSAFE);
             }
         }
