@@ -138,6 +138,7 @@ export const fr: Record<TKey, string> = {
   "sidebar.updateAvailable": "Mise à jour disponible : {version}",
   "sidebar.checkUpdate": "Rechercher des mises à jour",
   "sidebar.desktopUpdate": "Ouvrir les mises à jour de l’application",
+  "sidebar.terminalCommand": "Commande du terminal",
   "common.save": "Enregistrer",
   "common.saving": "Enregistrement…",
   "common.cancel": "Annuler",

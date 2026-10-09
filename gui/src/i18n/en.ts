@@ -141,6 +141,7 @@ export const en = {
   "sidebar.updateAvailable": "Update available: {version}",
   "sidebar.checkUpdate": "Check for updates",
   "sidebar.desktopUpdate": "Open desktop updates",
+  "sidebar.terminalCommand": "Terminal command",
   "common.save": "Save",
   "common.saving": "Saving…",
   "common.cancel": "Cancel",

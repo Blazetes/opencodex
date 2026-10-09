@@ -1471,6 +1471,7 @@ async fn register(app: &AppHandle, deadline: Instant) -> Registration {
     // than the state from before first run.
     let login = first_run::apply_start_at_login_default(app);
     first_run::adopt_launch_origin_argument(app);
+    crate::cli_command::reconcile_on_launch(app);
 
     // The verdict is published only once an icon actually exists. Announcing a tray and then
     // failing to install it would hide the window into nothing, which is the exact stranding D6
@@ -1616,7 +1617,9 @@ fn finish(app: &AppHandle, started: Instant, endpoint: ProxyEndpoint) {
         let mode = startup
             .as_ref()
             .map_or(Mode::Launch, |startup| startup.mode());
-        if keeps_update_page(mode, crate::window::shows_update_page(&window)) {
+        if crate::window::shows_cli_page(&window)
+            || keeps_update_page(mode, crate::window::shows_update_page(&window))
+        {
             return;
         }
         if loads_dashboard_on_ready(LaunchOrigin::detect(), visible, requested) {

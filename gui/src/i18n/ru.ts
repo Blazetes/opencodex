@@ -208,6 +208,7 @@ export const ru: Record<TKey, string> = {
   "sidebar.updateAvailable": "Доступно обновление: {version}",
   "sidebar.checkUpdate": "Проверить обновления",
   "sidebar.desktopUpdate": "Открыть обновления приложения",
+  "sidebar.terminalCommand": "Команда терминала",
   "common.save": "Сохранить",
   "common.saving": "Сохранение…",
   "common.cancel": "Отмена",

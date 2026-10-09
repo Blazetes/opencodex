@@ -208,6 +208,7 @@ export const zh: Record<TKey, string> = {
   "sidebar.updateAvailable": "有可用更新：{version}",
   "sidebar.checkUpdate": "检查更新",
   "sidebar.desktopUpdate": "打开桌面应用更新",
+  "sidebar.terminalCommand": "终端命令",
   "common.save": "保存",
   "common.saving": "保存中…",
   "common.cancel": "取消",
