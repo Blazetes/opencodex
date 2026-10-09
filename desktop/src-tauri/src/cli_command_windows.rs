@@ -297,6 +297,8 @@ pub(crate) mod private_acl {
         use crate::cli_command_record::{self as record, tests::Temp, Store};
         #[link(name = "advapi32")]
         unsafe extern "system" {
+            fn InitializeAcl(acl: *mut Acl, size: u32, revision: u32) -> i32;
+            fn AddAccessAllowedAce(acl: *mut Acl, revision: u32, mask: u32, sid: Ptr) -> i32;
             fn SetNamedSecurityInfoW(
                 name: *mut u16,
                 kind: u32,
@@ -324,8 +326,59 @@ pub(crate) mod private_acl {
         #[test]
         fn root_without_protection_is_refused_even_without_inherited_aces() {
             let t = Temp::new();
-            // A protected parent with no inheritable ACE makes the negative exact.
-            harden(&t.0, false).unwrap();
+            // icacls /grant:r replaces permissions but can retain the existing OI/CI flags.
+            // Replace the temporary parent's whole DACL with one non-inheritable user ACE.
+            let user = user().unwrap();
+            let size =
+                std::mem::size_of::<Acl>() as u32 + 8 + unsafe { GetLengthSid(user[0] as Ptr) };
+            let mut buffer = vec![0usize; (size as usize).div_ceil(std::mem::size_of::<usize>())];
+            let parent_acl = buffer.as_mut_ptr().cast::<Acl>();
+            assert_ne!(unsafe { InitializeAcl(parent_acl, size, 2) }, 0);
+            assert_ne!(
+                unsafe { AddAccessAllowedAce(parent_acl, 2, 0x1f01ff, user[0] as Ptr) },
+                0
+            );
+            let mut parent_name = wide(&t.0).unwrap();
+            assert_eq!(
+                unsafe {
+                    SetNamedSecurityInfoW(
+                        parent_name.as_mut_ptr(),
+                        1,
+                        4 | 0x80000000,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        parent_acl,
+                        ptr::null_mut(),
+                    )
+                },
+                0
+            );
+            verify(&t.0, true).unwrap();
+            let mut dacl = ptr::null_mut();
+            let mut descriptor = ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    GetNamedSecurityInfoW(
+                        parent_name.as_ptr(),
+                        1,
+                        4,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        &mut dacl,
+                        ptr::null_mut(),
+                        &mut descriptor,
+                    )
+                },
+                0
+            );
+            let descriptor = Local(descriptor);
+            assert!(!dacl.is_null());
+            assert_eq!(unsafe { (*dacl).count }, 1);
+            let mut ace = ptr::null_mut();
+            assert_ne!(unsafe { GetAce(dacl, 0, &mut ace) }, 0);
+            assert_eq!(unsafe { (*ace.cast::<AceHeader>()).flags } & 0x3, 0);
+            drop(descriptor);
+
             let root = t.0.join("root");
             record::private_dir(&root).unwrap();
             let mut name = wide(&root).unwrap();
@@ -347,6 +400,8 @@ pub(crate) mod private_acl {
                 0
             );
             let descriptor = Local(descriptor);
+            assert!(!dacl.is_null());
+            // Preserve the explicit, full-control root ACL and only remove its protection.
             assert_eq!(
                 unsafe {
                     SetNamedSecurityInfoW(
@@ -379,12 +434,22 @@ pub(crate) mod private_acl {
                 },
                 0
             );
-            let _descriptor = Local(descriptor);
+            let descriptor = Local(descriptor);
+            let mut control = 0;
+            let mut revision = 0;
+            assert_ne!(
+                unsafe { GetSecurityDescriptorControl(descriptor.0, &mut control, &mut revision) },
+                0
+            );
+            assert_eq!(control & 0x1000, 0);
+            assert!(!checked.is_null());
             for i in 0..unsafe { (*checked).count } as u32 {
                 let mut ace = ptr::null_mut();
                 assert_ne!(unsafe { GetAce(checked, i, &mut ace) }, 0);
                 assert_eq!(unsafe { (*ace.cast::<AceHeader>()).flags } & 0x10, 0);
             }
+            // All other child ACL rules pass; the root fails specifically on SE_DACL_PROTECTED.
+            verify(&root, false).unwrap();
             assert_eq!(verify(&root, true).unwrap_err(), UNSAFE);
         }
         #[test]
