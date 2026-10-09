@@ -49,7 +49,8 @@ writer attribution); non-cooperating external writers after the final freshness 
 
 ## Cycle revision (wp2 P, origin/dev 37e9294125)
 
-dev moved to `37e9294125` (#6820 and the #6734 merge); neither touches #6813's files. `git merge-tree --write-tree
+dev moved to `37e9294125` (#6820 and the #6734 merge). #6820 also edits both layout registries that #6813 touches; the
+union resolves that cleanly and the layout guards stay in C3. `git merge-tree --write-tree
 origin/dev refs/remotes/pr/6813` is clean (tree `3d755f0d31`). #6811 is merged (`c3bbaaa342`) and orthogonal.
 
 - **C1 branch.** In the lane worktree: `git switch -c codex/n5-6813-account-selection origin/dev`, then
@@ -80,3 +81,6 @@ origin/dev refs/remotes/pr/6813` is clean (tree `3d755f0d31`). #6811 is merged (
   (MAINTAINERS.md `dev` exception) with exact-head verification. The dev ruleset (20763889) defines no required status
   checks; the gate requires every triggered check to pass, and the queued-enforce-target exemption applies only because
   no check is ruleset-required. Close #6813 only after the merge is confirmed.
+- **Audit fold.** The merge gate also requires a fresh review-state read: no outstanding maintainer change request
+  (resolved or withdrawn), recorded with the exact-head CI evidence. The queued enforce-target exemption keeps all three
+  conditions (over one hour, all code CI green, reported). Each reviewer's examined union tree is recorded.

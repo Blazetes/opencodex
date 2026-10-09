@@ -71,3 +71,4 @@ fresh origin/dev with no conflict, and a union focused-test run when another PR 
 credit comment (merged PR, merge commit, author), and close fixed issues with a dev note. Partial items stay open
 with a comment. Still out of scope: release, main/preview, other lanes' PRs, fork workflow approval, the user's
 live environment.
+Gate addition (audit wp2): no outstanding maintainer change request on the PR at merge time (MAINTAINERS.md).
