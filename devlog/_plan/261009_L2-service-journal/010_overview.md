@@ -32,3 +32,10 @@ L1 (Desktop sidecar CLI authority) owns `bin/ocx.mjs`, `src/update/runtime-owner
 Three read-only gpt-6.1-sol architects produced proposals against `origin/dev` c15037b324 (agents 01a11e35-f359 wp2, 01a11e35-f422 wp3, 01a11e35-f578 wp4). Main dispositions are recorded per decision ID in 020–040.
 
 The same architects ran a reflection check on this plan. All three returned MISALIGNED with specific gaps, and every gap is folded into the unit docs: 020 and 040 have a "Reflection dispositions" section, and 030's contract absorbs them directly. Detailed pre-merge review findings for 030 stay in gitignored `.tmp/L2-scratch/`, following the AGENTS.md security-notes rule.
+
+## Roadmap lock (wp1)
+
+- **Audit trail.** Independent gpt-6.1-sol auditor 01a11e3f: FAIL with five blockers (publication safety, recovery write points, guard activation, absent config root, production admission), folded; FAIL with three, folded; then PASS at 9d256c895d. Each unit doc carries its "A-audit dispositions".
+- **Entry condition for each unit.** P revalidates the unit doc against the then-current `origin/dev`. It records whether L1's branch `codex/desktop-sidecar-cli-authority` touches any file in the unit's change map (`git diff --name-only origin/dev...codex/desktop-sidecar-cli-authority`). It also records whether `dev` moved any file the unit edits since c15037b324.
+- **Exit condition for each unit.** The PR targets `dev` with the full template, co-author trailers, and exact-head CI green. An independent sol review passes; wp2 and wp3 also need a security review. The PR is left unmerged and reported merge-ready.
+- **Publication.** This roadmap ships with the wp2 PR. 030 stays a scope note until the #6774 carry merges; its outcome is then recorded in `devlog/_fin/`.
