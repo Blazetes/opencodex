@@ -189,12 +189,14 @@ mod os {
         }
     }
     pub fn decode(b: &[u8]) -> Result<String> {
-        if b.len() % 2 != 0 {
+        if !b.len().is_multiple_of(2) {
             return Err("path-invalid-utf16".into());
         }
         let mut words: Vec<u16> = b
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         if words.pop() != Some(0) || words.contains(&0) {
             return Err("path-invalid-utf16".into());
