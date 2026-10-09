@@ -94,3 +94,13 @@ re-requested below.
 
 Revision 2 reflection: D1/D4/D5/D6/D7/D8 ALIGNED; reader-summary gap (placeholders in sync vs real IDs in status)
 folded. D2/D3 superseded; the architect confirmed its earlier effect-free claim was wrong.
+
+## Cycle revision (wp3 P, origin/dev 37e9294125)
+
+Revalidated: none of the wp3 files changed on dev since `730d898457`. `structure/config.md` is at exactly 600 lines,
+so its sentence joins the existing `load-degrade.ts` paragraph (line 123) instead of adding a line.
+`structure/cli-management.md` (115 lines) takes its sentence in the line-87 paragraph. Branch: `codex/n5-6757-aside-recovery`
+from origin/dev with the plan-unit commits cherry-picked first (the unit lands with this PR); D closes on that branch
+before any record commit. Merge and issue closure move to wp4 (`040_closeout.md`).
+wp3 ends after pushing the branch, opening a template-complete dev PR (Closes-style reference to #6757 in prose,
+since GitHub does not auto-close from dev), and recording receipt + review verdicts against that head.
