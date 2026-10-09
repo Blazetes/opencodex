@@ -59,3 +59,15 @@ first, then the auth carry, then the new CLI behavior).
 `structure/config.md` + `structure/providers/openai-accounts.md` (#6813, already in the PR), and the
 integrations doc that owns `src/cli/integration-aside-sync.ts` for wp3 (resolved in 030 via
 `structure/manifest.json`).
+
+## Authority amendment (coordinator steering, 2026-10-09)
+
+The coordinator relayed the user's instruction "머지까지해": this lane now merges its own PRs and closes the
+originals. Per-PR gate immediately before merge: base dev; no failed/cancelled/pending exact-head job (including
+triggered Windows jobs; a queued-only enforce-target over one hour with all code CI green is non-blocking and
+reported); `mergeable == MERGEABLE`; independent gpt-6.1-sol review PASS (plus sol security review PASS for #6813);
+fresh origin/dev with no conflict, and a union focused-test run when another PR touched the same files. Then
+`gh pr merge <n> --squash --admin` (carry bodies keep `Co-authored-by`), close carried/replaced originals with a
+credit comment (merged PR, merge commit, author), and close fixed issues with a dev note. Partial items stay open
+with a comment. Still out of scope: release, main/preview, other lanes' PRs, fork workflow approval, the user's
+live environment.
