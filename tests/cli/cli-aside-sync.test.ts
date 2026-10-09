@@ -71,9 +71,12 @@ describe("Aside-only synchronization command", () => {
       { profileId: 5, enabled: false, state: "current" }, { profileId: 6, state: "stale" },
       { profileId: -1, enabled: false, state: "stale" }, { profileId: -0, enabled: false, state: "stale" },
       { profileId: 1.5, enabled: false, state: "stale" }, { profileId: "7", enabled: false, state: "stale" },
+      { profileId: Number.MAX_SAFE_INTEGER + 1, enabled: false, state: "stale" },
       { profileId: 4, enabled: false, state: "stale" }, { profileId: 4, enabled: false, state: "stale" }, null,
+      { profileId: Number.MAX_SAFE_INTEGER, enabled: false, state: "stale" },
     ]);
-    expect(lines).toEqual([
+    expect(lines.filter(line => line.startsWith("Aside profile")).map(line => line.split(" ")[2])).toEqual(["0", "4", String(Number.MAX_SAFE_INTEGER)]);
+    expect(lines.slice(0, 4)).toEqual([
       "Aside profile 0 is off (stale). To reconnect it, review: ocx integration client preview --client aside --operation apply --profile 0",
       "Then, if the preview permits the change and you accept it: ocx integration client enable --client aside --profile 0",
       "Aside profile 4 is off (stale). To reconnect it, review: ocx integration client preview --client aside --operation apply --profile 4",

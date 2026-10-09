@@ -518,7 +518,13 @@ test("a malformed Aside profile sync policy warns once without echoing it and ke
     expect(messages).toContain("ocx integration client status --client aside");
     expect(messages).not.toContain("secret-shaped-aside-off");
     expect(readFileSync(getConfigPath(), "utf8")).toBe(bytes);
-    for (const valid of [undefined, { allProfiles: true }, { profiles: { "0": false } }]) {
+    for (const invalid of [null, [], "on", { allProfiles: "yes" }, { profiles: { "01": true } }, { legacyProfileId: -1 }]) {
+      warn.mockClear();
+      writeFileSync(getConfigPath(), JSON.stringify({ ...candidate(undefined), asideProfileSync: invalid }), "utf8");
+      expect(loadConfig().asideProfileSync).toEqual({ allProfiles: false });
+      expect(warn.mock.calls.flat().join("\n").match(/asideProfileSync is invalid/g)).toHaveLength(1);
+    }
+    for (const valid of [undefined, { allProfiles: true }, { profiles: { "0": false } }, { allProfiles: false, futureKey: "kept" }]) {
       warn.mockClear();
       writeFileSync(getConfigPath(), JSON.stringify({ ...candidate(undefined), asideProfileSync: valid }), "utf8");
       loadConfig();
