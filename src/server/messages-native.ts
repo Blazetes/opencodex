@@ -36,7 +36,7 @@ import {
   buildAnthropicMessagesPassthroughRequest,
   type AnthropicMessagesPassthroughRequest,
 } from "../adapters/anthropic/passthrough";
-import { resolveInboundModel } from "../claude/inbound";
+import { effortFromOutputConfig, resolveInboundModel } from "../claude/inbound";
 import { anthropicErrorBody, anthropicErrorResponse, claudeOverflowSsePayload, claudePromptTooLongMessage, collectAnthropicMessage, isContextOverflowText, isThroughputLimitText } from "../claude/outbound";
 import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
@@ -108,6 +108,7 @@ import {
 import {
   noteProviderAttemptSend,
   recordAttemptCredentialSource,
+  recordAttemptRequestedEffort,
   recordFirstOutput,
   recordKeyAttemptFailure,
   recordKeyWireAttemptUsage,
@@ -318,6 +319,15 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
   logCtx.requestedModel = requestedModel;
   if (route.routeReason === "model-alias" || route.modelId !== requestedModel) logCtx.requestedAlias = requestedModel;
   logCtx.requestedServiceTier = typeof body.service_tier === "string" ? body.service_tier : undefined;
+  if (logCtx.requestedEffort === undefined) {
+    const effort = effortFromOutputConfig(body.output_config);
+    const thinking = isRec(body.thinking) ? body.thinking : undefined;
+    const budget = thinking?.budget_tokens;
+    if (effort !== undefined) logCtx.requestedEffort = effort;
+    else if (thinking?.type === "disabled") logCtx.requestedEffort = "none";
+    else if (thinking?.type === "enabled" && typeof budget === "number"
+      && Number.isSafeInteger(budget) && budget > 0) logCtx.requestedEffort = `budget:${budget}`;
+  }
   // Reserve spend the way native Chat does: an input estimate that never enters usage, and the
   // caller's own output ceiling.
   if (logCtx.usageLogInputTokens === undefined) {
@@ -333,6 +343,7 @@ export async function handleNativeMessages(options: HandleNativeMessagesOptions)
     adapter: "anthropic",
   });
   attemptHandle.seal(logCtx.accountLogLabel);
+  recordAttemptRequestedEffort(logCtx);
   const { attempt } = attemptHandle;
   const finalLog = createFinalRequestLog(logIds, logCtx);
   const finishLog: FinishLog = (status, message, meta = { closeReason: "non_stream" }) => {

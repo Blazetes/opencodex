@@ -697,7 +697,7 @@ olarak test edilmelidir.
 
 ## Akıl yürütme çabası (Reasoning effort)
 
-Claude Code'un `/effort` ayarı adaptör genelinde korunur:
+Messages → Responses olarak çevrilen isteklerde Claude Code'un `/effort` ayarı şöyle eşlenir:
 
 | Hat formatı | Eşleme |
 | --- | --- |
@@ -705,7 +705,9 @@ Claude Code'un `/effort` ayarı adaptör genelinde korunur:
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, üzeri→`high` |
 | `thinking.type: "disabled"` | `reasoning: { effort: "none" }`; özet atlanır |
 
-Çözümlenen değer, istek günlüğünün **Reasoning effort** sütununda görünür.
+Çevrilen isteklerde eşlenen seviye, istek günlüğünün **Reasoning effort** sütununda görünür.
+Yönetilen yerel Messages isteklerinde tanınan bir `output_config.effort` yoksa etkin düşünme bütçesi
+`budget:<tokens>` olarak kaydedilir; bu günlük kaydı gönderilen istek gövdesini değiştirmez.
 
 ## Gelen çeviri (Messages → Responses)
 

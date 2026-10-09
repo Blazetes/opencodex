@@ -502,7 +502,7 @@ fingerprint 방식을 그대로 따르지만, 장시간 무인 작업에 쓰기 
 
 ## 추론 강도
 
-Claude Code의 `/effort` 설정은 어댑터에서도 유지돼요.
+Messages → Responses로 변환되는 요청에서는 Claude Code의 `/effort` 설정을 다음과 같이 매핑해요.
 
 | 전송 형식 | 매핑 |
 | --- | --- |
@@ -510,7 +510,9 @@ Claude Code의 `/effort` 설정은 어댑터에서도 유지돼요.
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, 그보다 크면→`high` |
 | `thinking.type: "disabled"` | `reasoning: { effort: "none" }`을 명시하고 `summary`는 생략해요 |
 
-해석된 값은 요청 로그의 **Reasoning effort** 열에 표시돼요.
+변환된 요청에서는 매핑된 단계가 요청 로그의 **Reasoning effort** 열에 표시돼요.
+관리형 네이티브 Messages는 인식 가능한 `output_config.effort`가 없을 때 활성화된 thinking 예산을
+`budget:<tokens>`로 기록하며, 이 로깅은 전송 본문을 변경하지 않아요.
 
 ## 입력 변환(Messages → Responses)
 

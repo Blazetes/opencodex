@@ -95,6 +95,12 @@ See [Configuration](/reference/configuration/providers/#anthropicaccountpool-exp
 
 ### Native Messages with account pooling
 
+Managed native Messages show validated caller effort in Logs and `usage.jsonl`, including each
+attempt: an explicit effort such as `xhigh` or `low`, `none` for disabled thinking, or
+`budget:<tokens>` for an enabled thinking budget. An explicit effort takes precedence over the
+thinking fallback. Adaptive thinking without an explicit effort stays blank. These labels describe
+request controls; they do not confirm what effort the upstream applied or change the wire body.
+
 An enabled Anthropic account pool prefers native Messages for eligible direct Anthropic routes
 when neither native rollout flag explicitly disables that path. In Providers → Anthropic →
 Account pooling → **How account selection works**, **Preserve native Claude requests** stores
@@ -812,7 +818,7 @@ would exceed the limit is omitted for that turn.
 
 ## Reasoning effort
 
-Claude Code's `/effort` setting is preserved across the adapter:
+On translated Messages → Responses requests, Claude Code's `/effort` setting maps as follows:
 
 | Wire format | Mapping |
 | --- | --- |
@@ -820,7 +826,9 @@ Claude Code's `/effort` setting is preserved across the adapter:
 | `thinking.type: "enabled"` + `budget_tokens` | ≤4096→`low`, ≤16384→`medium`, above→`high` |
 | `thinking.type: "disabled"` | `reasoning: { effort: "none" }`; summary omitted |
 
-The resolved value appears in the request log's **Reasoning effort** column.
+For translated requests, the resolved tier appears in the request log's **Reasoning effort** column.
+Managed native Messages log enabled thinking budgets as `budget:<tokens>` when no recognized
+`output_config.effort` is present; this logging does not change the wire body.
 
 ## Inbound translation (Messages → Responses)
 
