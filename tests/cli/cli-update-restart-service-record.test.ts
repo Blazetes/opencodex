@@ -77,12 +77,14 @@ test("invalid state, symlinked state or definition, EACCES and unstable reads re
     if (edit === "read-drift" || edit === "path-drift") s.deps.read = (fd, buffer, offset, length, position) => {
       const count = readSync(fd, buffer, offset, length, position);
       const bytes = buffer.subarray(offset, offset + count);
-      if (edit === "read-drift") writeFileSync(s.authority, JSON.stringify({ ...s.state, bunPath: "/fixture/bun-b" }));
+      // A different length keeps the drift observable through the descriptor on every platform;
+      // NTFS updates last-write time lazily for an open handle, but size immediately.
+      if (edit === "read-drift") writeFileSync(s.authority, JSON.stringify({ ...s.state, bunPath: "/fixture/bun-b-longer" }));
       else { renameSync(s.authority, s.authority + ".old"); writeFileSync(s.authority, bytes); }
       return count;
     };
     if (edit === "absent-drift") s.deps.read = (fd, buffer, offset, length, position) => { writeFileSync(s.mirror, JSON.stringify(s.state)); return readSync(fd, buffer, offset, length, position); };
-    expect(() => captureUpdateRestartServiceRecord(s.deps)).toThrow("update_restart_service_record_unverified");
+    expect(() => captureUpdateRestartServiceRecord(s.deps), edit).toThrow("update_restart_service_record_unverified");
   }
 });
 test("physical directory aliases retain fingerprint but record symlinks do not", () => {
