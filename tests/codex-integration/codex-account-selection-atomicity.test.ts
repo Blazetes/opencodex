@@ -353,6 +353,29 @@ describe("Codex active selection transaction", () => {
     await expectUpstreamIdentity(live, ACCOUNT_A);
   });
 
+  test("an unpersisted initial config adopts its published selection when bookkeeping fails", async () => {
+    const live = getDefaultConfig();
+    live.codexAccounts = [{ id: ACCOUNT_A, email: "selection-a@example.test", isMain: false }];
+    live.autoSwitchThreshold = 0;
+    live.codexMainAccountHardLock = false;
+    expect(existsSync(getConfigPath())).toBe(false);
+    const fault = spyOn(mutationLock, "bumpGenerationForCooperatingConfigWrite").mockImplementation(() => {
+      throw new Error("Injected initializer bookkeeping failure");
+    });
+    let response: Response;
+    try {
+      response = await select(live, ACCOUNT_A);
+      expect(fault.mock.calls.length).toBeGreaterThan(0);
+    } finally {
+      fault.mockRestore();
+    }
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ activeCodexAccountId: ACCOUNT_A,
+      warning: "config_bookkeeping_failed", appliesImmediately: true });
+    await expectSelection(live, ACCOUNT_A);
+    await expectUpstreamIdentity(live, ACCOUNT_A);
+  });
+
   test("an initially transient config cannot recreate its durable file after a successful selection", async () => {
     const live = getDefaultConfig();
     live.codexAccounts = [ACCOUNT_A, ACCOUNT_B].map(id => ({ id, email: `${id}@example.test`, isMain: false }));
