@@ -102,5 +102,5 @@ so its sentence joins the existing `load-degrade.ts` paragraph (line 123) instea
 `structure/cli-management.md` (115 lines) takes its sentence in the line-87 paragraph. Branch: `codex/n5-6757-aside-recovery`
 from origin/dev with the plan-unit commits cherry-picked first (the unit lands with this PR); D closes on that branch
 before any record commit. Merge and issue closure move to wp4 (`040_closeout.md`).
-wp3 ends after pushing the branch, opening a template-complete dev PR (Closes-style reference to #6757 in prose,
-since GitHub does not auto-close from dev), and recording receipt + review verdicts against that head.
+wp3 ends after pushing the branch, opening a template-complete dev PR with `Closes #6757` (closed manually after the
+merge, because GitHub does not auto-close from dev), and recording receipt + review verdicts against that head.

@@ -42,6 +42,7 @@ first, then the auth carry, then the new CLI behavior).
 | wp1 | `010_pr6734_thread_links.md` | review and union check of #6734; READY or carry | original #6734 (or carry) | wp0 |
 | wp2 | `020_pr6813_account_selection_carry.md` | carry #6813 onto dev, security review | new PR → dev | wp0 |
 | wp3 | `030_issue6757_aside_recovery.md` | Aside off/stale recovery guidance + cause report | new PR → dev (carries this unit) | wp0 |
+| wp4 | `040_closeout.md` | merge #6824 and the #6757 PR under the gate, close originals, final report | none | wp2, wp3 |
 
 ## Evidence baseline (origin/dev 730d898457)
 
