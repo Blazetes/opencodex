@@ -142,6 +142,7 @@
   "anthropic-agentrouter-language-framing.test.ts": "adapters/anthropic",
   "anthropic-baseurl-override.test.ts": "adapters/anthropic",
   "anthropic-compatible-stream.test.ts": "adapters/anthropic",
+  "anthropic-message-stop-termination.test.ts": "adapters/anthropic",
   "anthropic-cooldown-recovery.test.ts": "adapters/anthropic", "anthropic-empty-content.test.ts": "adapters/anthropic",
   "anthropic-eof-tolerance.test.ts": "adapters/anthropic", "anthropic-error-body.test.ts": "adapters/anthropic",
   "anthropic-error-stop-reason.test.ts": "adapters/anthropic", "anthropic-thinking-usage.test.ts": "adapters/anthropic", "anthropic-fast-opt-in.test.ts": "adapters/anthropic",
