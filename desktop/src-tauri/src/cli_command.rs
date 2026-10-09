@@ -60,29 +60,47 @@ fn perform(app: &AppHandle, action: Action) -> Result<Status> {
     let root = home.join(".opencodex-desktop");
     let exists = root.try_exists().map_err(|_| "io-failed")?;
     // First run checks the bundle before creating even the record directory (AM-10).
-    let observed = if !exists
+    let missing = !exists
         || !root
             .join("cli.json")
             .try_exists()
-            .map_err(|_| "io-failed")?
-    {
+            .map_err(|_| "io-failed")?;
+    let disabled = matches!(action, Action::Remove | Action::Enable(false));
+    let observed = if missing && !disabled {
         Some(observe_bundle(app)?)
     } else {
         None
     };
-    let initial = observed
-        .map(|b| -> Result<Record> {
-            let mut r = Record::fresh(b);
-            r.install_id = crate::identity::install_id(app).ok_or("install-id-unavailable")?;
-            Ok(r)
-        })
-        .transpose()?;
+    let initial = if missing {
+        let mut r = match &observed {
+            Some(b) => Record::fresh(b.clone()),
+            None => Record {
+                version: 1,
+                owner_id: uuid::Uuid::new_v4().to_string(),
+                install_id: String::new(),
+                generation: 1,
+                enabled: false,
+                bundle: None,
+                posix: None,
+                windows: None,
+                notify_pending: false,
+                pending: None,
+            },
+        };
+        r.install_id = crate::identity::install_id(app).ok_or("install-id-unavailable")?;
+        Some(r)
+    } else {
+        None
+    };
     perform_selected(
         root,
         &home,
         action,
         initial,
-        || observe_bundle(app),
+        || match observed {
+            Some(b) => Ok(b),
+            None => observe_bundle(app),
+        },
         |enabled| {
             app.state::<State>()
                 .latest
@@ -101,11 +119,14 @@ fn perform_selected(
     publish_enabled: impl FnOnce(bool),
 ) -> Result<Status> {
     let mut store = Store::open(root, Vec::new())?;
-    let current = store.read()?.or(initial);
+    let current = store.read()?;
     let enabled = match action {
         Action::Remove | Action::Enable(false) => false,
         Action::Enable(true) => true,
-        _ => current.as_ref().is_some_and(|r| r.enabled),
+        _ => current
+            .as_ref()
+            .or(initial.as_ref())
+            .is_some_and(|r| r.enabled),
     };
     #[cfg(unix)]
     let selected = if enabled {
@@ -124,7 +145,7 @@ fn perform_selected(
         home,
         selected,
         action,
-        current,
+        initial,
         observe,
         publish_enabled,
     )
@@ -150,7 +171,7 @@ fn perform_in(
     observe: impl FnOnce() -> Result<Bundle>,
     publish_enabled: impl FnOnce(bool),
 ) -> Result<Status> {
-    let observed = initial.as_ref().and_then(|r| r.bundle.clone());
+    // Initial/persisted records contain ownership history, never evidence of this launch.
     let mut r = match store.read()? {
         Some(r) => r,
         None => initial.ok_or("bundle-unavailable")?,
@@ -162,10 +183,7 @@ fn perform_in(
         _ => None,
     };
     let install_bundle = if desired == Some(true) || (desired != Some(false) && r.enabled) {
-        Some(match observed {
-            Some(b) => b,
-            None => observe()?,
-        })
+        Some(observe()?)
     } else {
         None
     };
@@ -350,12 +368,204 @@ pub fn show_page(app: &AppHandle) {
     }
 }
 
+#[cfg(test)]
+mod bootstrap_tests {
+    use super::*;
+    use record::tests::{bundle, Temp};
+    #[test]
+    fn first_off_and_remove_persist_disabled_intent_without_observing_a_bundle() {
+        for action in [Action::Enable(false), Action::Remove] {
+            let t = Temp::new();
+            let root = t.0.join("record");
+            let mut initial = Record::fresh(bundle());
+            initial.enabled = false;
+            initial.bundle = None;
+            let status = perform_selected(
+                root.clone(),
+                &t.0,
+                action,
+                Some(initial),
+                || panic!("disabled-must-not-observe-bundle"),
+                |_| {},
+            )
+            .unwrap();
+            assert!(!status.enabled);
+            let store = Store::open(root, vec![]).unwrap();
+            let r = store.read().unwrap().unwrap();
+            assert!(!r.enabled && r.bundle.is_none());
+        }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use record::tests::{bundle, Temp};
+    #[test]
+    fn selected_entry_refuses_unstable_bundle_before_registry_access() {
+        for action in [Action::Reconcile, Action::Repair, Action::Enable(true)] {
+            for error in ["development-launch", "temporary-bundle"] {
+                let t = Temp::new();
+                let store = t.store();
+                store.save(&Record::fresh(bundle())).unwrap();
+                let before = std::fs::read(store.root.join("cli.json")).unwrap();
+                let root = store.root.clone();
+                drop(store);
+                let calls = std::cell::Cell::new(0);
+                let result = perform_selected(
+                    root.clone(),
+                    &t.0,
+                    action,
+                    None,
+                    || {
+                        calls.set(calls.get() + 1);
+                        Err(error.into())
+                    },
+                    // A regressed observation shortcut must stop before reaching real registry IO.
+                    |_| assert_eq!(calls.get(), 1, "bundle-observation-skipped"),
+                );
+                assert_eq!(calls.get(), 1, "bundle-observation-skipped");
+                assert_eq!(result.unwrap_err(), error);
+                assert!(
+                    std::fs::read(root.join("cli.json")).unwrap() == before,
+                    "unstable-bundle-changed-record"
+                );
+            }
+        }
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use record::tests::{bundle, Temp};
     fn selected(t: &Temp) -> Vec<(String, std::path::PathBuf)> {
         vec![("zsh".into(), t.0.join(".zshrc"))]
+    }
+    fn selected_observation_case(case: &str) {
+        let t = Temp::new();
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cli_command::tests::selected_observation_child",
+                "--nocapture",
+            ])
+            .env("OCX_CLI_OBSERVATION_TEST", case)
+            .env("HOME", &t.0)
+            .env("ZDOTDIR", &t.0)
+            .env("XDG_CONFIG_HOME", t.0.join(".config"))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "selected-observation-failed");
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 passed"),
+            "selected-observation-not-executed"
+        );
+    }
+    #[test]
+    fn selected_entry_refreshes_bundle_path_version_and_shim() {
+        for action in ["reconcile", "repair", "enable"] {
+            selected_observation_case(&format!("update-{action}"));
+        }
+    }
+    #[test]
+    fn selected_entry_refuses_unstable_bundle_and_preserves_existing_files() {
+        for action in ["reconcile", "repair", "enable"] {
+            for error in ["development-launch", "temporary-bundle"] {
+                selected_observation_case(&format!("{error}-{action}"));
+            }
+        }
+    }
+    #[test]
+    fn selected_observation_child() {
+        let Ok(case) = std::env::var("OCX_CLI_OBSERVATION_TEST") else {
+            return;
+        };
+        let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+        let rc = home.join(".zshrc");
+        let root = home.join("record");
+        let store = Store::open(root.clone(), vec![rc.clone()]).unwrap();
+        perform_in(
+            &store,
+            &home,
+            vec![("zsh".into(), rc.clone())],
+            Action::Reconcile,
+            Some(Record::fresh(bundle())),
+            || Ok(bundle()),
+            |_| {},
+        )
+        .unwrap();
+        let snapshots: Vec<_> = [
+            root.join("cli.json"),
+            root.join("bin/ocx"),
+            root.join("path.sh"),
+            rc,
+        ]
+        .into_iter()
+        .map(|path| {
+            let bytes = std::fs::read(&path).unwrap();
+            (path, bytes)
+        })
+        .collect();
+        drop(store);
+        let (scenario, action) = case.rsplit_once('-').unwrap();
+        let action = match action {
+            "reconcile" => Action::Reconcile,
+            "repair" => Action::Repair,
+            "enable" => Action::Enable(true),
+            _ => panic!("observation-test-invalid"),
+        };
+        let calls = std::cell::Cell::new(0);
+        let mut moved = bundle();
+        moved.app_executable = home
+            .join("Moved.app/Contents/MacOS/app")
+            .to_string_lossy()
+            .into_owned();
+        moved.cli_executable = home
+            .join("Moved.app/Contents/MacOS/ocx")
+            .to_string_lossy()
+            .into_owned();
+        moved.version = "2".into();
+        let result = perform_selected(
+            root.clone(),
+            &home,
+            action,
+            None,
+            || {
+                calls.set(calls.get() + 1);
+                if scenario == "update" {
+                    Ok(moved.clone())
+                } else {
+                    Err(scenario.into())
+                }
+            },
+            |_| {},
+        );
+        assert_eq!(calls.get(), 1, "bundle-observation-skipped");
+        if scenario == "update" {
+            result.unwrap();
+            let store = Store::open(root.clone(), vec![]).unwrap();
+            let r = store.read().unwrap().unwrap();
+            assert!(r.bundle.as_ref() == Some(&moved), "bundle-not-refreshed");
+            let expected =
+                posix::render_shim(std::path::Path::new(&moved.cli_executable), &r.owner_id)
+                    .unwrap();
+            assert!(
+                std::fs::read(root.join("bin/ocx")).unwrap() == expected.as_bytes(),
+                "shim-target-not-refreshed"
+            );
+        } else {
+            assert_eq!(result.unwrap_err(), scenario);
+            for (path, bytes) in snapshots {
+                assert!(
+                    std::fs::read(path).unwrap() == bytes,
+                    "unstable-bundle-changed-files"
+                );
+            }
+            assert!(!home.join(".zlogin").exists());
+            assert!(!home.join(".bashrc").exists());
+            assert!(!home.join(".config/fish/config.fish").exists());
+        }
     }
     fn disabled_selector_case(action: &str) {
         let result = std::process::Command::new(std::env::current_exe().unwrap())
@@ -441,7 +651,7 @@ mod tests {
             selected(&t),
             Action::Reconcile,
             Some(Record::fresh(bundle())),
-            || panic!("fresh bundle is already observed"),
+            || Ok(bundle()),
             |_| {},
         )
         .unwrap();
