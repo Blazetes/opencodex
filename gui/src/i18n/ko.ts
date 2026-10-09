@@ -208,6 +208,7 @@ export const ko: Record<TKey, string> = {
   "sidebar.updateAvailable": "업데이트 있음: {version}",
   "sidebar.checkUpdate": "업데이트 확인",
   "sidebar.desktopUpdate": "데스크톱 앱 업데이트 열기",
+  "sidebar.terminalCommand": "터미널 명령",
   "common.save": "저장",
   "common.saving": "저장 중…",
   "common.cancel": "취소",

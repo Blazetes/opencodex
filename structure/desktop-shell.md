@@ -460,6 +460,35 @@ authentication remains in the shared API boundary.
 The desktop webview uses a Mozilla-compatible `OpenCodexDesktop/` user-agent
 marker, which the GUI detects to identify the shell without using IPC.
 
+## Desktop-owned terminal command
+
+`desktop/src-tauri/src/cli_command.rs` schedules one blocking reconcile after launch-origin
+adoption, independently of proxy startup. Stable macOS apps, Windows installs and Linux deb
+installs configure the command by default; off survives launch and removal. AppImage,
+temporary, translocated, debug and unpackaged launches do not install it.
+
+`desktop/src-tauri/src/cli_command_record.rs` owns the private `.opencodex-desktop/cli.json`
+record (64 KiB cap), OS-backed lock and external pending journals with before/after digests.
+The record grants generated-file ownership only, never runtime, service or shutdown authority.
+An enabled record carries a validated host-platform bundle even on its first pending save;
+disabled intent wins over pending work. Invalid records and journal conflicts block mutation.
+
+`desktop/src-tauri/src/cli_command_posix.rs` generates a fail-closed shim, shared PATH helper
+and final managed zsh/bash/fish blocks. Reconcile separates desired rc targets from recorded
+ownership; remove walks the recorded list and preserves modified blocks and unsafe files.
+The shim captures exported Anthropic slot names with an argv-bound random proof before dotenv;
+failed proof generation retains compiled-CLI stripping behavior.
+
+`desktop/src-tauri/src/cli_command_windows.rs` preserves raw HKCU Path text/type, changes only
+the owned entry and broadcasts Environment. Machine-Path conflicts are partial; existing
+shell selection is unobserved. Windows direct execution retains Anthropic stripping behavior.
+
+The tray and desktop-only dashboard entry beside Desktop update open `desktop/ui/cli.html`.
+`gui/src/lib/desktop-shell.ts` selects the platform's exact app origin. Four path-free commands
+are guarded by the main window's local CLI page; Back uses `return_to_dashboard`, guarded for
+the update and CLI pages. Removal saves off before cleanup and preserves modified user files.
+Configuration cannot enforce selection against aliases, absolute commands or later PATH edits.
+
 ## Release packaging and updater
 
 ### Linux packaged-shell acceptance
