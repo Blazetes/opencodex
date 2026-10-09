@@ -86,6 +86,16 @@ describe("/api/codex-agent-roles", () => {
     expect(JSON.parse(readFileSync(omoPath, "utf8"))["[codex]"].agents.explorer).toEqual({ model: "gpt-5.5" });
   });
 
+  test("a model-only save keeps the role's effort and its omo.jsonc reasoning", async () => {
+    const omoPath = join(root, "home", ".omo", "omo.jsonc");
+    writeFileSync(omoPath, '{ "[codex]": { "agents": { "explorer": { "model": "gpt-5.5", "reasoning": "high" } } } }\n');
+    await call("/api/codex-agent-roles/explorer", { method: "PUT", body: JSON.stringify({ model: "gpt-5.5", effort: "high" }) });
+    const saved = await put("explorer", "xai/grok-4.5");
+    expect(saved.status).toBe(200);
+    expect(readFileSync(join(root, "codex", "agents", "explorer.toml"), "utf8")).toContain('model_reasoning_effort = "high"');
+    expect(JSON.parse(readFileSync(omoPath, "utf8"))["[codex]"].agents.explorer).toEqual({ model: "xai/grok-4.5", reasoning: "high" });
+  });
+
   test("without LazyCodex it lists nothing, writes nothing, and never opens omo.jsonc", async () => {
     writeFileSync(join(root, "codex", "config.toml"), "");
     const omoPath = join(root, "home", ".omo", "omo.jsonc");

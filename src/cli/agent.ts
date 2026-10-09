@@ -404,13 +404,16 @@ async function roles(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   }
   if (action !== "set") throw new CliUsageError(`unknown roles action ${action}`, USAGE);
   const effort = takeOption(args, "--effort");
+  // An empty value is a supplied flag, not an absent one: dropping it would change the model and
+  // silently ignore the effort the operator asked for.
+  if (effort !== undefined && effort.trim() === "") throw new CliUsageError("--effort needs a reasoning level", USAGE);
   const role = args.shift();
   const model = args.shift();
   if (!role || !model) throw new CliUsageError("a role and a model are required", USAGE);
   rejectArgs(args, USAGE);
   const result = await runtimeRequest<{ toml?: { status?: string }; omoJsonc?: { status?: string } }>(
     `/api/codex-agent-roles/${encodeURIComponent(role)}`,
-    { method: "PUT", body: JSON.stringify(effort ? { model, effort } : { model }) },
+    { method: "PUT", body: JSON.stringify(effort !== undefined ? { model, effort } : { model }) },
     deps,
   );
   const omo = result.omoJsonc?.status;

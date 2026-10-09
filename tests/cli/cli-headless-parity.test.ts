@@ -1003,6 +1003,23 @@ describe("headless GUI parity CLI", () => {
     ]);
   });
 
+  test("agent roles set forwards --effort and refuses an empty one before any request", async () => {
+    const runtime = fakeRuntime(() => ({ toml: { status: "written" }, omoJsonc: { status: "written" } }));
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await handleAgentCommand(["roles", "set", "explorer", "a/model", "--effort", "high", "--json"], runtime.deps)).toBe(0);
+      expect(await handleAgentCommand(["roles", "set", "explorer", "b/model", "--effort", ""], runtime.deps)).toBe(2);
+      expect(errorSpy.mock.calls.map(call => String(call[0]))).toContain("Error: --effort needs a reasoning level");
+    } finally {
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+    expect(runtime.requests).toEqual([
+      { path: "/api/codex-agent-roles/explorer", method: "PUT", body: { model: "a/model", effort: "high" } },
+    ]);
+  });
+
   test("agent roles suggest prints proposals, and --apply writes only proposed roles through PUT", async () => {
     const proposals = {
       sizingModel: "gpt-5.5",
