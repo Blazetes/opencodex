@@ -15,6 +15,7 @@ import { lstatSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileS
 import { join } from "node:path";
 import type { OcxConfig } from "../types";
 import { renameAtomicFile } from "../lib/windows-atomic-replace";
+import { assertNotRealClaudeConfigUnderTest } from "../lib/test-home-guard";
 import { entryParts, SAFE_AGENT_MODEL_ID, withSubagentContextMarker } from "./subagent-model";
 import { stripOneMillionMarker } from "./context-windows";
 import { claudeConfigDir } from "./gateway-cache";
@@ -203,6 +204,16 @@ function isOwnedFile(path: string): boolean {
  * atomic (tmp + rename). Best-effort — returns null on any failure.
  */
 export function syncClaudeAgentDefs(defs: readonly ClaudeAgentDef[], configDir = claudeConfigDir()): string[] | null {
+  // Outside the best-effort catch: under an armed test process a write or prune of the
+  // real Claude agents directory must throw, never degrade to "returned null" (#6775).
+  // Every path written is judged by where it resolves, including a pre-placed link named like
+  // a definition or its temporary file.
+  const agentsDir = join(configDir, "agents");
+  assertNotRealClaudeConfigUnderTest(
+    configDir,
+    agentsDir,
+    ...defs.flatMap(def => [join(agentsDir, def.file), `${join(agentsDir, def.file)}.tmp-${process.pid}`]),
+  );
   try {
     const dir = join(configDir, "agents");
     if (defs.length === 0) {
