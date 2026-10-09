@@ -70,12 +70,6 @@ fn perform(app: &AppHandle, action: Action) -> Result<Status> {
     } else {
         None
     };
-    #[cfg(unix)]
-    let selected = posix::targets(&home)?;
-    #[cfg(not(unix))]
-    let selected: Vec<(String, std::path::PathBuf)> = Vec::new();
-    let allowed = selected.iter().map(|(_, p)| p.clone()).collect();
-    let store = Store::open(root, allowed)?;
     let initial = observed
         .map(|b| -> Result<Record> {
             let mut r = Record::fresh(b);
@@ -83,10 +77,9 @@ fn perform(app: &AppHandle, action: Action) -> Result<Status> {
             Ok(r)
         })
         .transpose()?;
-    perform_in(
-        &store,
+    perform_selected(
+        root,
         &home,
-        selected,
         action,
         initial,
         || observe_bundle(app),
@@ -97,6 +90,43 @@ fn perform(app: &AppHandle, action: Action) -> Result<Status> {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .enabled = enabled;
         },
+    )
+}
+fn perform_selected(
+    root: std::path::PathBuf,
+    home: &std::path::Path,
+    action: Action,
+    initial: Option<Record>,
+    observe: impl FnOnce() -> Result<Bundle>,
+    publish_enabled: impl FnOnce(bool),
+) -> Result<Status> {
+    let mut store = Store::open(root, Vec::new())?;
+    let current = store.read()?.or(initial);
+    let enabled = match action {
+        Action::Remove | Action::Enable(false) => false,
+        Action::Enable(true) => true,
+        _ => current.as_ref().is_some_and(|r| r.enabled),
+    };
+    #[cfg(unix)]
+    let selected = if enabled {
+        posix::targets(home)?
+    } else {
+        Vec::new()
+    };
+    #[cfg(not(unix))]
+    let selected: Vec<(String, std::path::PathBuf)> = {
+        let _ = enabled;
+        Vec::new()
+    };
+    store.rc_allowed = selected.iter().map(|(_, p)| p.clone()).collect();
+    perform_in(
+        &store,
+        home,
+        selected,
+        action,
+        current,
+        observe,
+        publish_enabled,
     )
 }
 fn observe_bundle(app: &AppHandle) -> Result<Bundle> {
@@ -157,11 +187,22 @@ fn perform_in(
     publish_enabled(r.enabled);
     // A disabled interrupted install rolls back its completed prefix. It never finishes installing.
     store.recover(&mut r)?;
+    // Retry settled/recovery debt before target planning, which may itself fail.
+    let mut notify_issues = Vec::new();
+    if let Err(e) = store.notify_with(&mut r, windows::notify) {
+        notify_issues.push(e);
+    }
     let remove = explicit_remove || (!r.enabled && matches!(action, Action::Reconcile));
     if !remove && !r.enabled {
         return Ok(Status {
             enabled: false,
-            phase: "disabled".into(),
+            phase: if notify_issues.is_empty() {
+                "disabled"
+            } else {
+                "partial"
+            }
+            .into(),
+            issues: notify_issues,
             ..Status::default()
         });
     }
@@ -197,9 +238,10 @@ fn perform_in(
         changes,
         if remove { "remove" } else { "install" },
     )?;
+    issues.extend(notify_issues);
     issues.extend(store.journal_issues(&r));
     if registry_changed {
-        if let Err(e) = windows::notify() {
+        if let Err(e) = store.notify_with(&mut r, windows::notify) {
             issues.push(e);
         }
     }
@@ -314,6 +356,80 @@ mod tests {
     use record::tests::{bundle, Temp};
     fn selected(t: &Temp) -> Vec<(String, std::path::PathBuf)> {
         vec![("zsh".into(), t.0.join(".zshrc"))]
+    }
+    fn disabled_selector_case(action: &str) {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cli_command::tests::disabled_selector_child",
+                "--nocapture",
+            ])
+            .env("OCX_CLI_SELECTOR_TEST", action)
+            .env("ZDOTDIR", "/invalid:zdotdir")
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "disabled-selector-failed");
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("1 passed"),
+            "disabled-selector-not-executed"
+        );
+    }
+    #[test]
+    fn remove_uses_recorded_targets_with_unrepresentable_zdotdir() {
+        disabled_selector_case("remove");
+    }
+    #[test]
+    fn off_uses_recorded_targets_with_unrepresentable_zdotdir() {
+        disabled_selector_case("off");
+    }
+    #[test]
+    fn disabled_reconcile_uses_recorded_targets_with_unrepresentable_zdotdir() {
+        disabled_selector_case("reconcile");
+    }
+    #[test]
+    fn disabled_selector_child() {
+        let Ok(action) = std::env::var("OCX_CLI_SELECTOR_TEST") else {
+            return;
+        };
+        let t = Temp::new();
+        assert_eq!(posix::targets(&t.0).unwrap_err(), "path-unrepresentable");
+        let store = t.store();
+        perform_in(
+            &store,
+            &t.0,
+            selected(&t),
+            Action::Reconcile,
+            Some(Record::fresh(bundle())),
+            || Ok(bundle()),
+            |_| {},
+        )
+        .unwrap();
+        let action = match action.as_str() {
+            "remove" => Action::Remove,
+            "off" => Action::Enable(false),
+            "reconcile" => {
+                let mut r = store.read().unwrap().unwrap();
+                r.enabled = false;
+                store.save(&r).unwrap();
+                Action::Reconcile
+            }
+            _ => panic!("selector-test-invalid"),
+        };
+        let root = store.root.clone();
+        drop(store);
+        let status = perform_selected(
+            root.clone(),
+            &t.0,
+            action,
+            None,
+            || panic!("disabled-must-not-observe-bundle"),
+            |_| {},
+        )
+        .unwrap();
+        assert!(!status.enabled);
+        assert!(!t.0.join(".zshrc").exists());
+        assert!(!root.join("bin/ocx").exists());
+        assert!(!root.join("path.sh").exists());
     }
     #[test]
     fn fresh_stable_bundle_installs_without_npm() {

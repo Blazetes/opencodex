@@ -162,6 +162,8 @@ pub struct Record {
     pub bundle: Option<Bundle>,
     pub posix: Option<Posix>,
     pub windows: Option<Windows>,
+    #[serde(default)]
+    pub notify_pending: bool,
     pub pending: Option<Journal>,
 }
 impl Record {
@@ -176,6 +178,7 @@ impl Record {
             bundle: Some(bundle),
             posix: None,
             windows: None,
+            notify_pending: false,
             pending: None,
         }
     }
@@ -190,6 +193,162 @@ pub struct Store {
 unsafe extern "C" {
     fn geteuid() -> u32;
     fn flock(fd: i32, op: i32) -> i32;
+}
+#[cfg(target_os = "macos")]
+mod acl {
+    use super::*;
+    use std::{
+        ffi::{c_void, CString},
+        os::unix::ffi::OsStrExt,
+    };
+    const EXTENDED: i32 = 0x100;
+    unsafe extern "C" {
+        fn acl_get_file(path: *const i8, kind: i32) -> *mut c_void;
+        fn acl_get_entry(acl: *mut c_void, entry_id: i32, entry: *mut *mut c_void) -> i32;
+        fn acl_set_file(path: *const i8, kind: i32, acl: *mut c_void) -> i32;
+        fn acl_init(count: i32) -> *mut c_void;
+        fn acl_free(acl: *mut c_void) -> i32;
+    }
+    fn name(path: &Path) -> Result<CString> {
+        CString::new(path.as_os_str().as_bytes()).map_err(|_| "private-acl-unsafe".into())
+    }
+    pub fn present(path: &Path) -> Result<bool> {
+        // NULL/ENOENT denotes no ACL only on an existing, non-symlink path.
+        let m = fs::symlink_metadata(path).map_err(|_| "private-acl-unsafe")?;
+        if m.file_type().is_symlink() {
+            return Err("private-acl-unsafe".into());
+        }
+        let path = name(path)?;
+        let acl = unsafe { acl_get_file(path.as_ptr(), EXTENDED) };
+        if acl.is_null() {
+            return if std::io::Error::last_os_error().raw_os_error() == Some(2) {
+                Ok(false)
+            } else {
+                Err("private-acl-unsafe".into())
+            };
+        }
+        let mut entry = std::ptr::null_mut();
+        // Darwin returns 0 for an entry and -1/EINVAL for an empty ACL.
+        let result = unsafe { acl_get_entry(acl, 0, &mut entry) };
+        let errno = std::io::Error::last_os_error().raw_os_error();
+        let freed = unsafe { acl_free(acl) };
+        if freed != 0 {
+            return Err("private-acl-unsafe".into());
+        }
+        match (result, errno) {
+            (0, _) => Ok(true),
+            (-1, Some(22)) => Ok(false),
+            _ => Err("private-acl-unsafe".into()),
+        }
+    }
+    pub fn clear(path: &Path) -> Result<()> {
+        let path = name(path)?;
+        let acl = unsafe { acl_init(0) };
+        if acl.is_null() {
+            return Err("private-acl-unsafe".into());
+        }
+        let result = unsafe { acl_set_file(path.as_ptr(), EXTENDED, acl) };
+        let freed = unsafe { acl_free(acl) };
+        if result != 0 || freed != 0 {
+            Err("private-acl-unsafe".into())
+        } else {
+            Ok(())
+        }
+    }
+}
+#[cfg(target_os = "linux")]
+mod acl {
+    use super::*;
+    use std::{
+        ffi::{c_void, CString},
+        os::unix::ffi::OsStrExt,
+    };
+    const NAMES: [&[u8]; 2] = [b"system.posix_acl_access\0", b"system.posix_acl_default\0"];
+    unsafe extern "C" {
+        fn getxattr(path: *const i8, name: *const i8, value: *mut c_void, size: usize) -> isize;
+        fn removexattr(path: *const i8, name: *const i8) -> i32;
+    }
+    fn name(path: &Path) -> Result<CString> {
+        CString::new(path.as_os_str().as_bytes()).map_err(|_| "private-acl-unsafe".into())
+    }
+    pub fn present(path: &Path) -> Result<bool> {
+        let m = fs::symlink_metadata(path).map_err(|_| "private-acl-unsafe")?;
+        if m.file_type().is_symlink() {
+            return Err("private-acl-unsafe".into());
+        }
+        let path = name(path)?;
+        for attr in NAMES {
+            let n =
+                unsafe { getxattr(path.as_ptr(), attr.as_ptr().cast(), std::ptr::null_mut(), 0) };
+            if n >= 0 {
+                return Ok(true);
+            }
+            if !matches!(
+                std::io::Error::last_os_error().raw_os_error(),
+                Some(61 | 95)
+            ) {
+                return Err("private-acl-unsafe".into());
+            }
+        }
+        Ok(false)
+    }
+    pub fn clear(path: &Path) -> Result<()> {
+        let path = name(path)?;
+        for attr in NAMES {
+            if unsafe { removexattr(path.as_ptr(), attr.as_ptr().cast()) } != 0
+                && !matches!(
+                    std::io::Error::last_os_error().raw_os_error(),
+                    Some(61 | 95)
+                )
+            {
+                return Err("private-acl-unsafe".into());
+            }
+        }
+        Ok(())
+    }
+}
+pub fn rc_acl_check(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err("rc-acl-present".into()),
+        Ok(_) => {}
+    }
+    #[cfg(unix)]
+    if acl::present(path).map_err(|_| "rc-acl-present")? {
+        return Err("rc-acl-present".into());
+    }
+    Ok(())
+}
+fn private_check(path: &Path, directory: bool, mode: u32, root: bool) -> Result<()> {
+    check(path, directory).map_err(|_| "private-acl-unsafe")?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let m = fs::symlink_metadata(path).map_err(|_| "private-acl-unsafe")?;
+        if m.mode() & 0o777 != mode || acl::present(path)? {
+            return Err("private-acl-unsafe".into());
+        }
+        let _ = root;
+    }
+    #[cfg(windows)]
+    {
+        let _ = mode;
+        crate::cli_command_windows::private_acl::verify(path, root)?;
+    }
+    Ok(())
+}
+fn harden_new(path: &Path, directory: bool) -> Result<()> {
+    #[cfg(unix)]
+    {
+        acl::clear(path)?;
+        if acl::present(path)? {
+            return Err("private-acl-unsafe".into());
+        }
+        let _ = directory;
+    }
+    #[cfg(windows)]
+    crate::cli_command_windows::private_acl::harden(path, directory)?;
+    Ok(())
 }
 pub fn check(path: &Path, directory: bool) -> Result<()> {
     let m = io(fs::symlink_metadata(path))?;
@@ -238,7 +397,7 @@ pub fn check(path: &Path, directory: bool) -> Result<()> {
 }
 pub fn private_dir(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(_) => check(path, true)?,
+        Ok(_) => private_check(path, true, 0o700, true)?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             #[cfg(unix)]
             {
@@ -249,18 +408,11 @@ pub fn private_dir(path: &Path) -> Result<()> {
             }
             #[cfg(not(unix))]
             io(fs::create_dir(path))?;
+            harden_new(path, true)?;
         }
         Err(_) => return Err("io-failed".into()),
     }
-    check(path, true)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if io(fs::metadata(path))?.permissions().mode() & 0o777 != 0o700 {
-            return Err("directory-permissions".into());
-        }
-    }
-    Ok(())
+    private_check(path, true, 0o700, true)
 }
 fn read_limited(path: &Path, limit: usize, reason: &str) -> Result<Option<Vec<u8>>> {
     match fs::symlink_metadata(path) {
@@ -282,12 +434,8 @@ pub fn read_bytes(path: &Path) -> Result<Option<Vec<u8>>> {
 }
 fn private_bytes(path: &Path, limit: usize, reason: &str) -> Result<Option<Vec<u8>>> {
     let bytes = read_limited(path, limit, reason)?;
-    #[cfg(unix)]
     if bytes.is_some() {
-        use std::os::unix::fs::PermissionsExt;
-        if io(fs::metadata(path))?.permissions().mode() & 0o777 != 0o600 {
-            return Err("record-permissions".into());
-        }
+        private_check(path, false, 0o600, false)?;
     }
     Ok(bytes)
 }
@@ -308,7 +456,9 @@ fn new_file(path: &Path, mode: u32) -> Result<fs::File> {
     }
     #[cfg(not(unix))]
     let _ = mode;
-    io(o.open(path))
+    let file = io(o.open(path))?;
+    harden_new(path, false)?;
+    Ok(file)
 }
 #[cfg(windows)]
 fn replace(from: &Path, to: &Path) -> Result<()> {
@@ -332,6 +482,7 @@ fn replace(from: &Path, to: &Path) -> Result<()> {
 pub fn atomic(path: &Path, before: Option<&[u8]>, after: &[u8], mode: u32) -> Result<()> {
     let parent = path.parent().ok_or("unsafe-file")?;
     check(parent, true)?;
+    rc_acl_check(path)?;
     let tmp = parent.join(format!(".ocx-cli-{}", Uuid::new_v4()));
     let result = (|| {
         let original = fs::symlink_metadata(path).ok();
@@ -370,6 +521,7 @@ pub fn atomic(path: &Path, before: Option<&[u8]>, after: &[u8], mode: u32) -> Re
                 return Err("concurrent-edit".into());
             }
         }
+        rc_acl_check(path)?;
         if read_bytes(path)?.as_deref() != before {
             return Err("concurrent-edit".into());
         }
@@ -383,6 +535,7 @@ pub fn atomic(path: &Path, before: Option<&[u8]>, after: &[u8], mode: u32) -> Re
 }
 fn lock(root: &Path) -> Result<fs::File> {
     let p = root.join("cli.lock");
+    let existed = fs::symlink_metadata(&p).is_ok();
     if fs::symlink_metadata(&p).is_ok() {
         check(&p, false)?;
         #[cfg(unix)]
@@ -401,6 +554,10 @@ fn lock(root: &Path) -> Result<fs::File> {
         o.mode(0o600);
     }
     let f = io(o.open(&p))?;
+    if !existed {
+        harden_new(&p, false)?;
+    }
+    private_check(&p, false, 0o600, false)?;
     #[cfg(unix)]
     {
         use std::os::fd::AsRawFd;
@@ -446,16 +603,49 @@ fn lock(root: &Path) -> Result<fs::File> {
 }
 impl Store {
     pub fn open(root: PathBuf, rc_allowed: Vec<PathBuf>) -> Result<Self> {
+        // Inspect every existing private path before creating even the lock file.
+        if fs::symlink_metadata(&root).is_ok() {
+            private_check(&root, true, 0o700, true)?;
+            for (name, directory, mode) in [
+                ("bin", true, 0o700),
+                ("journal", true, 0o700),
+                ("backups", true, 0o700),
+                ("cli.json", false, 0o600),
+                ("cli.lock", false, 0o600),
+                ("bin/ocx", false, 0o700),
+                ("path.sh", false, 0o600),
+            ] {
+                let path = root.join(name);
+                match fs::symlink_metadata(&path) {
+                    Ok(_) => private_check(&path, directory, mode, false)?,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(_) => return Err("private-acl-unsafe".into()),
+                }
+                if matches!(name, "journal" | "backups") {
+                    for entry in io(fs::read_dir(&path))? {
+                        private_check(&io(entry)?.path(), false, 0o600, false)?;
+                    }
+                }
+            }
+        }
         private_dir(&root)?;
         let guard = lock(&root)?;
         for name in ["bin", "backups", "journal"] {
-            private_dir(&root.join(name))?;
+            let path = root.join(name);
+            if fs::symlink_metadata(&path).is_ok() {
+                private_check(&path, true, 0o700, false)?;
+            } else {
+                private_dir(&path)?;
+            }
         }
-        Ok(Self {
+        let store = Self {
             root,
             rc_allowed,
             _lock: guard,
-        })
+        };
+        let record = store.read()?; // A missing record is a validated empty record.
+        store.clean_unreferenced(record.as_ref())?;
+        Ok(store)
     }
     fn owned_path(&self, s: &str, r: &Record, next: &Record) -> bool {
         let p = Path::new(s);
@@ -480,14 +670,46 @@ impl Store {
         {
             return false;
         }
-        p.file_stem()
-            .and_then(|s| s.to_str())
-            .and_then(|s| s.split_once('-'))
-            .is_some_and(|(g, i)| {
-                g.parse::<u64>()
-                    .is_ok_and(|n| n > 0 && n <= 9_007_199_254_740_991)
-                    && i.parse::<usize>().is_ok_and(|n| n < 32)
+        p.file_stem().and_then(|s| s.to_str()).is_some_and(|s| {
+            let parts: Vec<_> = s.split('-').collect();
+            let (g, i) = match parts.as_slice() {
+                [g, i] => (*g, *i),
+                [g, tx, i]
+                    if tx.len() == 32
+                        && tx
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
+                {
+                    (*g, *i)
+                }
+                _ => return false,
+            };
+            g.parse::<u64>()
+                .is_ok_and(|n| n > 0 && n <= 9_007_199_254_740_991)
+                && i.parse::<usize>().is_ok_and(|n| n < 32)
+        })
+    }
+    fn clean_unreferenced(&self, record: Option<&Record>) -> Result<()> {
+        let referenced: std::collections::HashSet<_> = record
+            .and_then(|r| r.pending.as_ref())
+            .map(|j| {
+                j.changes
+                    .iter()
+                    .map(|c| Path::new(&c.journal_file))
+                    .collect()
             })
+            .unwrap_or_default();
+        for entry in io(fs::read_dir(self.root.join("journal")))? {
+            let entry = io(entry)?;
+            let path = entry.path();
+            if io(entry.file_type())?.is_file()
+                && self.journal_path(&path.to_string_lossy())
+                && !referenced.contains(path.as_path())
+            {
+                io(fs::remove_file(path))?;
+            }
+        }
+        sync_dir(&self.root.join("journal"))
     }
     pub fn validate(&self, r: &Record, nested: bool) -> Result<()> {
         self.validate_for(r, nested, platform())
@@ -640,13 +862,16 @@ impl Store {
     ) -> Result<Record> {
         next.generation = current.generation + 1;
         next.pending = None;
+        let registry_changed = changes.iter().any(|c| c.kind.starts_with("registry-"));
+        next.notify_pending |= registry_changed || current.notify_pending;
+        let txid = Uuid::new_v4().simple().to_string();
         let mut refs = Vec::new();
         let mut payloads = Vec::new();
         for (i, c) in changes.iter().enumerate() {
             let journal_file = self
                 .root
                 .join("journal")
-                .join(format!("{}-{i}.json", next.generation));
+                .join(format!("{}-{txid}-{i}.json", next.generation));
             let payload = JournalFile {
                 version: 1,
                 kind: c.kind.clone(),
@@ -671,6 +896,7 @@ impl Store {
             payloads.push((journal_file, bytes));
         }
         let mut pending = current.clone();
+        pending.notify_pending |= registry_changed;
         pending.pending = Some(Journal {
             operation: op.into(),
             changes: refs,
@@ -737,11 +963,27 @@ impl Store {
         })
     }
     pub fn recover(&self, current: &mut Record) -> Result<()> {
+        self.recover_with(
+            current,
+            crate::cli_command_windows::read_change,
+            crate::cli_command_windows::apply_change,
+        )
+    }
+    fn recover_with(
+        &self,
+        current: &mut Record,
+        mut read_registry: impl FnMut(&Change) -> Result<Option<Vec<u8>>>,
+        mut write_registry: impl FnMut(&Change) -> Result<()>,
+    ) -> Result<()> {
         self.validate(current, false)?;
         let Some(j) = current.pending.clone() else {
             return Ok(());
         };
         let wanted = (j.operation == "install") == current.enabled;
+        if j.changes.iter().any(|c| c.kind.starts_with("registry-")) && !current.notify_pending {
+            current.notify_pending = true;
+            self.save(current)?;
+        }
         // State table for BOTH operations: wanted: before -> after, after -> done.
         // Cancelled: before -> leave, after -> before (reverse completed prefix).
         // Any third state or unverifiable journal -> stop, preserve pending and backups.
@@ -754,6 +996,9 @@ impl Store {
             changes.reverse();
         }
         for c in changes {
+            if c.kind == "file" && !Path::new(&c.path).starts_with(&self.root) {
+                rc_acl_check(Path::new(&c.path))?;
+            }
             let (before, after) = if wanted {
                 (&c.before, &c.after)
             } else {
@@ -762,7 +1007,7 @@ impl Store {
             let found = if c.kind == "file" {
                 read_bytes(Path::new(&c.path))?
             } else {
-                crate::cli_command_windows::read_change(&c)?
+                read_registry(&c)?
             };
             if found == *after {
                 continue;
@@ -784,6 +1029,9 @@ impl Store {
             }
             if c.kind == "file" {
                 let p = Path::new(&c.path);
+                if !p.starts_with(&self.root) {
+                    rc_acl_check(p)?;
+                }
                 if let Some(b) = after {
                     atomic(p, before.as_deref(), b, c.mode)?;
                 } else {
@@ -794,14 +1042,20 @@ impl Store {
                     sync_dir(p.parent().ok_or("unsafe-file")?)?;
                 }
             } else {
+                // Old pending records also acquire debt before replay/rollback writes.
+                if !current.notify_pending {
+                    current.notify_pending = true;
+                    self.save(current)?;
+                }
                 let mut step = c.clone();
                 step.before = before.clone();
                 step.after = after.clone();
-                crate::cli_command_windows::apply_change(&step)?;
+                write_registry(&step)?;
             }
         }
         let mut settled = if wanted { *j.next } else { current.clone() };
         settled.pending = None;
+        settled.notify_pending |= current.notify_pending;
         settled.generation = current.generation + 1;
         self.save(&settled)?;
         *current = settled;
@@ -809,6 +1063,20 @@ impl Store {
             io(fs::remove_file(c.journal_file))?;
         }
         sync_dir(&self.root.join("journal"))
+    }
+    pub fn notify_with(
+        &self,
+        current: &mut Record,
+        broadcast: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        if current.notify_pending {
+            broadcast()?;
+            let mut settled = current.clone();
+            settled.notify_pending = false;
+            self.save(&settled)?;
+            *current = settled;
+        }
+        Ok(())
     }
     pub fn journal_issues(&self, r: &Record) -> Vec<String> {
         let referenced: std::collections::HashSet<_> = r
@@ -888,6 +1156,11 @@ pub(crate) mod tests {
         let t = Temp::new();
         let s = t.store();
         for (json, host, valid) in [
+            (
+                include_str!("../../../tests/fixtures/desktop-cli-record/notify-pending.json"),
+                "win32",
+                true,
+            ),
             (
                 include_str!("../../../tests/fixtures/desktop-cli-record/valid-darwin.json"),
                 "darwin",
@@ -993,6 +1266,357 @@ pub(crate) mod tests {
         let old = read_bytes(&p).unwrap().unwrap();
         atomic(&p, Some(&old), &vec![b' '; RECORD_LIMIT + 1], 0o600).unwrap();
         assert_eq!(s.read().unwrap_err(), "record-too-large");
+    }
+    #[test]
+    fn unsaved_first_transaction_journals_are_cleaned_on_reopen() {
+        let t = Temp::new();
+        let s = t.store();
+        let p = t.0.join(".zshrc");
+        atomic(&p, None, b"old", 0o600).unwrap();
+        let mut r = Record::fresh(bundle());
+        let pending = s.prepare(&r, r.clone(), &[change(&p)], "install").unwrap();
+        let leftover = pending.pending.unwrap().changes[0].journal_file.clone();
+        assert!(Path::new(&leftover).is_file());
+        drop(s);
+        let s = t.store();
+        assert!(!Path::new(&leftover).exists());
+        let mut c = change(&p);
+        c.after = Some(b"different".to_vec());
+        s.transact(&mut r.clone(), r.clone(), vec![c], "install")
+            .unwrap();
+        r = s.read().unwrap().unwrap();
+        assert!(r.pending.is_none());
+        assert_eq!(fs::read(p).unwrap(), b"different");
+    }
+    #[test]
+    fn final_save_before_journal_deletion_is_cleaned_on_reopen() {
+        let t = Temp::new();
+        let s = t.store();
+        let p = t.0.join(".zshrc");
+        let r = Record::fresh(bundle());
+        atomic(&p, None, b"old", 0o600).unwrap();
+        let pending = s.prepare(&r, r.clone(), &[change(&p)], "install").unwrap();
+        let journal = pending.pending.as_ref().unwrap();
+        atomic(&p, Some(b"old"), b"new", 0o600).unwrap();
+        s.save(&journal.next).unwrap();
+        let leftover = journal.changes[0].journal_file.clone();
+        drop(s);
+        let s = t.store();
+        assert!(!Path::new(&leftover).exists());
+        assert!(s.read().unwrap().unwrap().pending.is_none());
+        assert_eq!(fs::read(p).unwrap(), b"new");
+    }
+    #[test]
+    fn corrupt_record_preserves_all_journals_on_reopen() {
+        let t = Temp::new();
+        let s = t.store();
+        let r = Record::fresh(bundle());
+        let pending = s
+            .prepare(&r, r.clone(), &[change(&t.0.join(".zshrc"))], "install")
+            .unwrap();
+        let leftover = pending.pending.unwrap().changes[0].journal_file.clone();
+        let bytes = fs::read(&leftover).unwrap();
+        atomic(&s.root.join("cli.json"), None, b"{", 0o600).unwrap();
+        drop(s);
+        assert!(Store::open(t.0.join("record"), vec![]).is_err());
+        assert!(fs::read(leftover).unwrap() == bytes);
+    }
+    #[test]
+    fn referenced_legacy_and_txid_journals_survive_cleanup() {
+        for legacy in [false, true] {
+            let t = Temp::new();
+            let s = t.store();
+            let r = Record::fresh(bundle());
+            let p = t.0.join(".zshrc");
+            atomic(&p, None, b"old", 0o600).unwrap();
+            let mut pending = s.prepare(&r, r.clone(), &[change(&p)], "install").unwrap();
+            let c = &mut pending.pending.as_mut().unwrap().changes[0];
+            if legacy {
+                let old = s.root.join("journal/2-0.json");
+                fs::rename(&c.journal_file, &old).unwrap();
+                c.journal_file = old.to_string_lossy().into_owned();
+            }
+            let referenced = c.journal_file.clone();
+            s.save(&pending).unwrap();
+            atomic(&s.root.join("journal/unrelated.txt"), None, b"keep", 0o600).unwrap();
+            drop(s);
+            let s = t.store();
+            assert!(Path::new(&referenced).is_file());
+            assert!(s.root.join("journal/unrelated.txt").is_file());
+            s.recover(&mut pending).unwrap();
+            assert_eq!(fs::read(p).unwrap(), b"new");
+        }
+    }
+    #[test]
+    fn broadcast_debt_survives_failure_and_remove_then_retries_once() {
+        let t = Temp::new();
+        let s = t.store();
+        let mut r = Record::fresh(bundle());
+        r.notify_pending = true;
+        s.save(&r).unwrap();
+        assert_eq!(
+            s.notify_with(&mut r, || Err("environment-broadcast-failed".into()))
+                .unwrap_err(),
+            "environment-broadcast-failed"
+        );
+        assert!(s.read().unwrap().unwrap().notify_pending);
+        r.enabled = false;
+        r.windows = None;
+        s.save(&r).unwrap();
+        drop(s);
+        let s = t.store();
+        let mut r = s.read().unwrap().unwrap();
+        let count = std::cell::Cell::new(0);
+        s.notify_with(&mut r, || {
+            count.set(count.get() + 1);
+            Ok(())
+        })
+        .unwrap();
+        s.notify_with(&mut r, || panic!("settled debt must not broadcast again"))
+            .unwrap();
+        assert_eq!(count.get(), 1);
+        assert!(!s.read().unwrap().unwrap().notify_pending);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn registry_install_remove_recovery_and_rollback_keep_durable_broadcast_debt() {
+        use std::cell::RefCell;
+        for scenario in ["install", "remove", "rollback", "crash-after-write"] {
+            let t = Temp::new();
+            let s = t.store();
+            let mut current = Record::fresh(bundle());
+            let mut next = current.clone();
+            let (_, owned) =
+                crate::cli_command_windows::prepend("old", r"C:\Desktop", "REG_SZ").unwrap();
+            if scenario == "remove" {
+                current.enabled = false;
+                current.windows = Some(owned);
+                next = current.clone();
+                next.windows = None;
+            } else {
+                next.windows = Some(owned);
+            }
+            let c = Change {
+                kind: "registry-sz".into(),
+                path: "HKCU\\Environment\\Path".into(),
+                before: Some(b"old".to_vec()),
+                after: Some(b"new".to_vec()),
+                mode: 0,
+                backup_path: None,
+            };
+            current = s
+                .prepare(
+                    &current,
+                    next,
+                    &[c],
+                    if scenario == "remove" {
+                        "remove"
+                    } else {
+                        "install"
+                    },
+                )
+                .unwrap();
+            assert!(current.notify_pending);
+            s.save(&current).unwrap();
+            let registry = RefCell::new(Some(
+                if matches!(scenario, "rollback" | "crash-after-write") {
+                    b"new".to_vec()
+                } else {
+                    b"old".to_vec()
+                },
+            ));
+            if scenario == "rollback" {
+                current.enabled = false;
+                current.pending.as_mut().unwrap().next.enabled = false;
+                // Exercise legacy debt acquisition in the save that starts rollback.
+                current.notify_pending = false;
+                s.save(&current).unwrap();
+            }
+            s.recover_with(
+                &mut current,
+                |_| Ok(registry.borrow().clone()),
+                |c| {
+                    assert!(s.read().unwrap().unwrap().notify_pending);
+                    *registry.borrow_mut() = c.after.clone();
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(current.pending.is_none() && current.notify_pending);
+            assert_eq!(
+                registry.into_inner().unwrap(),
+                if scenario == "rollback" {
+                    b"old"
+                } else {
+                    b"new"
+                }
+            );
+            if scenario == "remove" {
+                assert!(current.windows.is_none());
+            }
+            assert!(s
+                .notify_with(&mut current, || Err("environment-broadcast-failed".into()))
+                .is_err());
+            assert!(s.read().unwrap().unwrap().notify_pending);
+            drop(s);
+            let s = t.store();
+            let mut current = s.read().unwrap().unwrap();
+            let count = std::cell::Cell::new(0);
+            s.notify_with(&mut current, || {
+                count.set(count.get() + 1);
+                Ok(())
+            })
+            .unwrap();
+            s.notify_with(&mut current, || panic!("broadcast-must-not-repeat"))
+                .unwrap();
+            assert_eq!(count.get(), 1);
+            assert!(!s.read().unwrap().unwrap().notify_pending);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn rc_acl_refuses_replay_and_rollback_without_losing_pending_ownership() {
+        for rollback in [false, true] {
+            let t = Temp::new();
+            let s = t.store();
+            let p = t.0.join(".zshrc");
+            let mut r = Record::fresh(bundle());
+            atomic(&p, None, if rollback { b"new" } else { b"old" }, 0o600).unwrap();
+            r = s.prepare(&r, r.clone(), &[change(&p)], "install").unwrap();
+            if rollback {
+                r.enabled = false;
+                r.pending.as_mut().unwrap().next.enabled = false;
+            }
+            s.save(&r).unwrap();
+            chmod_acl(&p, true);
+            assert_eq!(s.recover(&mut r).unwrap_err(), "rc-acl-present");
+            assert!(s.read().unwrap().unwrap().pending.is_some());
+            assert_eq!(
+                fs::read(&p).unwrap(),
+                if rollback { b"new" } else { b"old" }
+            );
+            assert!(rc_acl_check(&p).is_err());
+            chmod_acl(&p, false);
+            s.recover(&mut r).unwrap();
+            assert_eq!(fs::read(p).unwrap(), if rollback { b"old" } else { b"new" });
+        }
+    }
+    #[cfg(target_os = "macos")]
+    pub(crate) fn chmod_acl(path: &Path, add: bool) {
+        let mut command = std::process::Command::new("/bin/chmod");
+        if add {
+            command.args(["+a", if path.is_dir() { "everyone allow read,readattr,readextattr,readsecurity,file_inherit,directory_inherit" } else { "everyone allow read,readattr,readextattr,readsecurity" }]);
+        } else {
+            command.arg("-N");
+        }
+        assert!(
+            command
+                .arg(path)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success(),
+            "acl-command-failed"
+        );
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn acl_empty_missing_inherited_and_new_store_contract() {
+        let t = Temp::new();
+        assert!(!acl::present(&t.0).unwrap());
+        assert!(acl::present(&t.0.join("missing")).is_err());
+        chmod_acl(&t.0, true);
+        let inherited = t.0.join("inherited");
+        fs::create_dir(&inherited).unwrap();
+        fs::set_permissions(&inherited, {
+            use std::os::unix::fs::PermissionsExt;
+            fs::Permissions::from_mode(0o700)
+        })
+        .unwrap();
+        assert!(acl::present(&inherited).unwrap());
+        assert!(private_dir(&inherited).is_err());
+        chmod_acl(&inherited, false);
+        private_dir(&inherited).unwrap();
+        let s = t.store();
+        assert!(!acl::present(&s.root).unwrap());
+        atomic(&s.root.join("journal/2-0.json"), None, b"test", 0o600).unwrap();
+        assert!(!acl::present(&s.root.join("journal/2-0.json")).unwrap());
+        let root = s.root.clone();
+        drop(s);
+        Store::open(root, vec![]).unwrap();
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn existing_private_acl_is_refused_before_any_store_write() {
+        for name in [
+            "",
+            "bin",
+            "journal",
+            "backups",
+            "cli.json",
+            "cli.lock",
+            "bin/ocx",
+            "path.sh",
+            "journal/2-0.json",
+            "backups/test",
+        ] {
+            let t = Temp::new();
+            let s = t.store();
+            s.save(&Record::fresh(bundle())).unwrap();
+            for (file, mode) in [
+                ("bin/ocx", 0o700),
+                ("path.sh", 0o600),
+                ("journal/2-0.json", 0o600),
+                ("backups/test", 0o600),
+            ] {
+                atomic(&s.root.join(file), None, b"keep", mode).unwrap();
+            }
+            let record = fs::read(s.root.join("cli.json")).unwrap();
+            let root = s.root.clone();
+            drop(s);
+            chmod_acl(&root.join(name), true);
+            assert!(Store::open(root.clone(), vec![]).is_err());
+            assert!(fs::read(root.join("cli.json")).unwrap() == record);
+            assert!(root.join("journal/2-0.json").is_file());
+            chmod_acl(&root.join(name), false);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_acl_inheritance_clear_and_existing_child_refusal() {
+        let t = Temp::new();
+        let set = |path: &Path, spec: &str| {
+            std::process::Command::new("setfacl")
+                .args(["-m", spec])
+                .arg(path)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+        };
+        let result = set(&t.0, "d:u:65534:rwx");
+        if result
+            .as_ref()
+            .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+        {
+            eprintln!("acl-test-skipped-setfacl-unavailable");
+            return;
+        }
+        assert!(result.unwrap().success(), "acl-command-failed");
+        let s = t.store();
+        assert!(!acl::present(&s.root).unwrap());
+        let p = s.root.join("backups/test");
+        atomic(&p, None, b"keep", 0o600).unwrap();
+        assert!(!acl::present(&p).unwrap());
+        assert!(set(&p, "u:65534:r--").unwrap().success());
+        // Keep the numeric mode private so this negative specifically proves ACL inspection.
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&p, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let root = s.root.clone();
+        drop(s);
+        assert!(Store::open(root, vec![]).is_err());
     }
     #[test]
     fn corrupt_record_does_not_become_first_run() {

@@ -396,6 +396,7 @@ pub(crate) fn plan(
         // Never create an arbitrary external ZDOTDIR/XDG directory tree; absent parents are reported.
         let attempt: Result<RcFile> = (|| {
             ensure_rc_parent(p, home)?;
+            record::rc_acl_check(p)?;
             let old = record::read_bytes(p)?;
             let previous = current
                 .posix
@@ -424,6 +425,7 @@ pub(crate) fn plan(
             let after = edit_rc(old.as_deref().unwrap_or_default(), &managed, false)?;
             let mut backup = previous.and_then(|f| f.backup_path.clone());
             if old.as_deref() != Some(after.as_slice()) {
+                record::rc_acl_check(p)?;
                 let c = change(store, p, old.clone(), Some(after), mode(p));
                 if backup.is_none() {
                     backup = c.backup_path.clone();
@@ -472,6 +474,7 @@ pub(crate) fn plan(
 }
 fn remove_rc(store: &Store, f: &RcFile, changes: &mut Vec<Change>) -> Result<()> {
     let p = Path::new(&f.path);
+    record::rc_acl_check(p)?;
     let Some(old) = record::read_bytes(p)? else {
         return Ok(());
     };
@@ -498,6 +501,7 @@ fn remove_rc(store: &Store, f: &RcFile, changes: &mut Vec<Change>) -> Result<()>
         Some(after)
     };
     if result.as_deref() != Some(old.as_slice()) {
+        record::rc_acl_check(p)?;
         changes.push(change(store, p, Some(old), result, mode(p)));
     }
     Ok(())
@@ -550,6 +554,70 @@ pub fn remove_plan(store: &Store, current: &Record) -> Result<(Record, Vec<Chang
 mod tests {
     use super::*;
     use record::tests::{bundle, Temp};
+    #[cfg(target_os = "macos")]
+    fn rc_acl(path: &Path, add: bool) {
+        let mut command = std::process::Command::new("/bin/chmod");
+        if add {
+            command.args(["+a", "nobody deny read"]);
+        } else {
+            command.arg("-N");
+        }
+        assert!(
+            command
+                .arg(path)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .unwrap()
+                .success(),
+            "acl-command-failed"
+        );
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn rc_acl_refuses_install_reposition_remove_and_keeps_owned_artifacts() {
+        let t = Temp::new();
+        let s = t.store();
+        let p = t.0.join(".zshrc");
+        record::atomic(&p, None, b"# user\n", 0o600).unwrap();
+        rc_acl(&p, true);
+        let mut r = Record::fresh(bundle());
+        let selected = vec![("zsh".into(), p.clone())];
+        let (next, changes, issues) = plan(&s, &r, bundle(), &t.0, selected.clone()).unwrap();
+        assert_eq!(issues, ["rc-acl-present"]);
+        assert!(changes.iter().all(|c| c.path != p.to_string_lossy()));
+        assert_eq!(fs::read(&p).unwrap(), b"# user\n");
+        assert!(record::rc_acl_check(&p).is_err());
+        s.transact(&mut r, next, changes, "install").unwrap();
+        rc_acl(&p, false);
+        let (next, changes, _) = plan(&s, &r, bundle(), &t.0, selected.clone()).unwrap();
+        s.transact(&mut r, next, changes, "install").unwrap();
+        let mut bytes = fs::read(&p).unwrap();
+        bytes.extend_from_slice(b"# later\n");
+        fs::write(&p, &bytes).unwrap();
+        rc_acl(&p, true);
+        let (next, changes, issues) = plan(&s, &r, bundle(), &t.0, selected).unwrap();
+        assert_eq!(issues, ["rc-acl-present"]);
+        assert!(changes.is_empty());
+        assert_eq!(next.posix.as_ref().unwrap().rc_files.len(), 1);
+        r.enabled = false;
+        s.save(&r).unwrap();
+        let (next, changes, issues) = remove_plan(&s, &r).unwrap();
+        assert_eq!(issues, ["rc-acl-present"]);
+        assert!(changes.is_empty());
+        s.transact(&mut r, next, changes, "remove").unwrap();
+        assert!(r.posix.as_ref().unwrap().rc_files.len() == 1);
+        assert!(s.root.join("bin/ocx").is_file());
+        assert!(s.root.join("path.sh").is_file());
+        assert!(fs::read(&p).unwrap() == bytes);
+        assert!(record::rc_acl_check(&p).is_err());
+        rc_acl(&p, false);
+        let (next, changes, issues) = remove_plan(&s, &r).unwrap();
+        assert!(issues.is_empty());
+        s.transact(&mut r, next, changes, "remove").unwrap();
+        assert_eq!(fs::read(p).unwrap(), b"# user\n# later\n");
+        assert!(r.posix.is_none());
+    }
     fn root() -> PathBuf {
         fs::canonicalize(std::env::temp_dir())
             .unwrap()

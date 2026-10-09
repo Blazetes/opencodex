@@ -5,6 +5,424 @@ use crate::cli_command_record::{Bundle, Record};
 use crate::cli_command_record::{Change, Result};
 #[cfg(windows)]
 use std::path::Path;
+#[cfg(windows)]
+pub(crate) mod private_acl {
+    use super::*;
+    use std::{
+        ffi::c_void,
+        os::windows::ffi::OsStrExt,
+        process::{Command, Stdio},
+        ptr,
+        time::{Duration, Instant},
+    };
+    type Ptr = *mut c_void;
+    const UNSAFE: &str = "private-acl-unsafe";
+    #[repr(C)]
+    struct Acl {
+        revision: u8,
+        reserved: u8,
+        size: u16,
+        count: u16,
+        reserved2: u16,
+    }
+    #[repr(C)]
+    struct AceHeader {
+        kind: u8,
+        flags: u8,
+        size: u16,
+    }
+    #[repr(C)]
+    struct Sid {
+        revision: u8,
+        count: u8,
+        authority: [u8; 6],
+        sub: [u32; 2],
+    }
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        fn OpenProcessToken(process: Ptr, access: u32, token: *mut Ptr) -> i32;
+        fn GetTokenInformation(
+            token: Ptr,
+            class: u32,
+            info: Ptr,
+            size: u32,
+            needed: *mut u32,
+        ) -> i32;
+        fn ConvertSidToStringSidW(sid: Ptr, out: *mut *mut u16) -> i32;
+        fn GetNamedSecurityInfoW(
+            name: *const u16,
+            kind: u32,
+            info: u32,
+            owner: *mut Ptr,
+            group: *mut Ptr,
+            dacl: *mut *mut Acl,
+            sacl: *mut *mut Acl,
+            descriptor: *mut Ptr,
+        ) -> u32;
+        fn GetSecurityDescriptorControl(
+            descriptor: Ptr,
+            control: *mut u16,
+            revision: *mut u32,
+        ) -> i32;
+        fn GetSecurityDescriptorDacl(
+            descriptor: Ptr,
+            present: *mut i32,
+            dacl: *mut *mut Acl,
+            defaulted: *mut i32,
+        ) -> i32;
+        fn EqualSid(a: Ptr, b: Ptr) -> i32;
+        fn IsValidSid(sid: Ptr) -> i32;
+        fn IsValidAcl(acl: *mut Acl) -> i32;
+        fn GetAce(acl: *mut Acl, index: u32, ace: *mut Ptr) -> i32;
+        fn GetLengthSid(sid: Ptr) -> u32;
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetCurrentProcess() -> Ptr;
+        fn CloseHandle(handle: Ptr) -> i32;
+        fn LocalFree(memory: Ptr) -> Ptr;
+    }
+    struct Local(Ptr);
+    impl Drop for Local {
+        fn drop(&mut self) {
+            if !self.0.is_null() {
+                unsafe {
+                    LocalFree(self.0);
+                }
+            }
+        }
+    }
+    struct Token(Ptr);
+    impl Drop for Token {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.0);
+            }
+        }
+    }
+    fn user() -> Result<Vec<usize>> {
+        let mut token = ptr::null_mut();
+        if unsafe { OpenProcessToken(GetCurrentProcess(), 0x8, &mut token) } == 0 {
+            return Err(UNSAFE.into());
+        }
+        let token = Token(token);
+        let mut needed = 0;
+        unsafe {
+            GetTokenInformation(token.0, 1, ptr::null_mut(), 0, &mut needed);
+        }
+        if needed < std::mem::size_of::<usize>() as u32 || needed > 65536 {
+            return Err(UNSAFE.into());
+        }
+        let mut bytes = vec![0usize; (needed as usize).div_ceil(std::mem::size_of::<usize>())];
+        if unsafe {
+            GetTokenInformation(token.0, 1, bytes.as_mut_ptr().cast(), needed, &mut needed)
+        } == 0
+        {
+            return Err(UNSAFE.into());
+        }
+        if unsafe { IsValidSid(bytes[0] as Ptr) } == 0 {
+            return Err(UNSAFE.into());
+        }
+        Ok(bytes)
+    }
+    fn wide(path: &Path) -> Result<Vec<u16>> {
+        let out: Vec<_> = path.as_os_str().encode_wide().collect();
+        if out.contains(&0) {
+            return Err(UNSAFE.into());
+        }
+        Ok(out.into_iter().chain(Some(0)).collect())
+    }
+    pub fn verify(path: &Path, root: bool) -> Result<()> {
+        let user = user()?;
+        let name = wide(path)?;
+        let mut owner = ptr::null_mut();
+        let mut dacl = ptr::null_mut();
+        let mut descriptor = ptr::null_mut();
+        let code = unsafe {
+            GetNamedSecurityInfoW(
+                name.as_ptr(),
+                1,
+                1 | 4,
+                &mut owner,
+                ptr::null_mut(),
+                &mut dacl,
+                ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        // Owner and DACL point inside this allocation; only the descriptor is freed.
+        let descriptor = Local(descriptor);
+        if code != 0 || descriptor.0.is_null() || owner.is_null() || dacl.is_null() {
+            return Err(UNSAFE.into());
+        }
+        let mut control = 0;
+        let mut revision = 0;
+        let mut present = 0;
+        let mut defaulted = 0;
+        if unsafe { GetSecurityDescriptorControl(descriptor.0, &mut control, &mut revision) } == 0
+            || unsafe {
+                GetSecurityDescriptorDacl(descriptor.0, &mut present, &mut dacl, &mut defaulted)
+            } == 0
+            || present == 0
+            || dacl.is_null()
+            || unsafe { IsValidAcl(dacl) } == 0
+            || unsafe { IsValidSid(owner) } == 0
+            || unsafe { EqualSid(owner, user[0] as Ptr) } == 0
+            || root && control & 0x1000 == 0
+        {
+            return Err(UNSAFE.into());
+        }
+        let mut system = Sid {
+            revision: 1,
+            count: 1,
+            authority: [0, 0, 0, 0, 0, 5],
+            sub: [18, 0],
+        };
+        let mut admins = Sid {
+            revision: 1,
+            count: 2,
+            authority: [0, 0, 0, 0, 0, 5],
+            sub: [32, 544],
+        };
+        let mut full_control = false;
+        for i in 0..unsafe { (*dacl).count } as u32 {
+            let mut ace = ptr::null_mut();
+            if unsafe { GetAce(dacl, i, &mut ace) } == 0 || ace.is_null() {
+                return Err(UNSAFE.into());
+            }
+            let header = unsafe { &*ace.cast::<AceHeader>() };
+            if header.kind != 0 || header.size < 16 || root && header.flags & 0x10 != 0 {
+                return Err(UNSAFE.into());
+            }
+            let mask = unsafe { *ace.cast::<u8>().add(4).cast::<u32>() };
+            let sid = unsafe { ace.cast::<u8>().add(8).cast::<c_void>() };
+            if unsafe { IsValidSid(sid) } == 0
+                || unsafe { GetLengthSid(sid) } + 8 > header.size as u32
+            {
+                return Err(UNSAFE.into());
+            }
+            let is_user = unsafe { EqualSid(sid, user[0] as Ptr) } != 0;
+            if !is_user
+                && unsafe { EqualSid(sid, (&mut system as *mut Sid).cast()) } == 0
+                && unsafe { EqualSid(sid, (&mut admins as *mut Sid).cast()) } == 0
+            {
+                return Err(UNSAFE.into());
+            }
+            // INHERIT_ONLY_ACE does not grant this object access.
+            full_control |= is_user
+                && header.flags & 0x8 == 0
+                && (mask & 0x1f01ff == 0x1f01ff || mask & 0x10000000 != 0);
+        }
+        if !full_control {
+            return Err(UNSAFE.into());
+        }
+        Ok(())
+    }
+    fn icacls(path: &Path, args: &[String]) -> Result<()> {
+        let system = std::env::var("SystemRoot").map_err(|_| UNSAFE)?;
+        let b = system.as_bytes();
+        if b.len() < 3
+            || !b[0].is_ascii_alphabetic()
+            || b[1] != b':'
+            || !matches!(b[2], b'/' | b'\\')
+            || system.contains(['\0', '\r', '\n'])
+            || system.split(['/', '\\']).any(|s| matches!(s, "." | ".."))
+        {
+            return Err(UNSAFE.into());
+        }
+        let exe = Path::new(&system).join("System32/icacls.exe");
+        let mut child = Command::new(exe)
+            .arg(path)
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|_| UNSAFE)?;
+        let start = Instant::now();
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    return if status.success() {
+                        Ok(())
+                    } else {
+                        Err(UNSAFE.into())
+                    }
+                }
+                Ok(None) if start.elapsed() < Duration::from_secs(10) => {
+                    std::thread::sleep(Duration::from_millis(20))
+                }
+                _ => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(UNSAFE.into());
+                }
+            }
+        }
+    }
+    pub fn harden(path: &Path, directory: bool) -> Result<()> {
+        let user = user()?;
+        let mut raw = ptr::null_mut();
+        let code = unsafe { ConvertSidToStringSidW(user[0] as Ptr, &mut raw) };
+        let sid = Local(raw.cast());
+        if code == 0 || sid.0.is_null() {
+            return Err(UNSAFE.into());
+        }
+        let mut len = 0;
+        while len < 256 && unsafe { *raw.add(len) } != 0 {
+            len += 1;
+        }
+        if len == 256 {
+            return Err(UNSAFE.into());
+        }
+        let sid_text = String::from_utf16(unsafe { std::slice::from_raw_parts(raw, len) })
+            .map_err(|_| UNSAFE)?;
+        let grant = format!("*{sid_text}:{}F", if directory { "(OI)(CI)" } else { "" });
+        icacls(path, &["/grant:r".into(), grant])?;
+        icacls(path, &["/inheritance:r".into()])?;
+        icacls(
+            path,
+            &[
+                "/remove".into(),
+                "*S-1-1-0".into(),
+                "*S-1-5-11".into(),
+                "*S-1-5-32-545".into(),
+            ],
+        )?;
+        verify(path, directory)
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::cli_command_record::{self as record, tests::Temp, Store};
+        #[link(name = "advapi32")]
+        unsafe extern "system" {
+            fn SetNamedSecurityInfoW(
+                name: *mut u16,
+                kind: u32,
+                info: u32,
+                owner: Ptr,
+                group: Ptr,
+                dacl: *mut Acl,
+                sacl: *mut Acl,
+            ) -> u32;
+        }
+        #[test]
+        fn hardened_root_and_inherited_child_are_valid_after_store_reopen() {
+            let t = Temp::new();
+            let s = t.store();
+            verify(&s.root, true).unwrap();
+            let child = s.root.join("backups/child");
+            std::fs::write(&child, b"test").unwrap();
+            verify(&child, false).unwrap();
+            let root = s.root.clone();
+            drop(s);
+            let s = Store::open(root, vec![]).unwrap();
+            verify(&s.root, true).unwrap();
+            verify(&child, false).unwrap();
+        }
+        #[test]
+        fn root_without_protection_is_refused_even_without_inherited_aces() {
+            let t = Temp::new();
+            // A protected parent with no inheritable ACE makes the negative exact.
+            harden(&t.0, false).unwrap();
+            let root = t.0.join("root");
+            record::private_dir(&root).unwrap();
+            let mut name = wide(&root).unwrap();
+            let mut dacl = ptr::null_mut();
+            let mut descriptor = ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    GetNamedSecurityInfoW(
+                        name.as_ptr(),
+                        1,
+                        4,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        &mut dacl,
+                        ptr::null_mut(),
+                        &mut descriptor,
+                    )
+                },
+                0
+            );
+            let descriptor = Local(descriptor);
+            assert_eq!(
+                unsafe {
+                    SetNamedSecurityInfoW(
+                        name.as_mut_ptr(),
+                        1,
+                        4 | 0x20000000,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        dacl,
+                        ptr::null_mut(),
+                    )
+                },
+                0
+            );
+            drop(descriptor);
+            let mut checked = ptr::null_mut();
+            let mut descriptor = ptr::null_mut();
+            assert_eq!(
+                unsafe {
+                    GetNamedSecurityInfoW(
+                        name.as_ptr(),
+                        1,
+                        4,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        &mut checked,
+                        ptr::null_mut(),
+                        &mut descriptor,
+                    )
+                },
+                0
+            );
+            let _descriptor = Local(descriptor);
+            for i in 0..unsafe { (*checked).count } as u32 {
+                let mut ace = ptr::null_mut();
+                assert_ne!(unsafe { GetAce(checked, i, &mut ace) }, 0);
+                assert_eq!(unsafe { (*ace.cast::<AceHeader>()).flags } & 0x10, 0);
+            }
+            assert_eq!(verify(&root, true).unwrap_err(), UNSAFE);
+        }
+        #[test]
+        fn explicit_everyone_ace_is_refused_on_root_and_child() {
+            let t = Temp::new();
+            let s = t.store();
+            let child = s.root.join("backups/child");
+            std::fs::write(&child, b"test").unwrap();
+            for (path, root) in [(&s.root, true), (&child, false)] {
+                icacls(path, &["/grant".into(), "*S-1-1-0:R".into()]).unwrap();
+                assert_eq!(verify(path, root).unwrap_err(), UNSAFE);
+            }
+        }
+        #[test]
+        fn protected_owned_root_with_null_dacl_is_refused() {
+            let t = Temp::new();
+            let root = t.0.join("root");
+            record::private_dir(&root).unwrap();
+            let mut name = wide(&root).unwrap();
+            assert_eq!(
+                unsafe {
+                    SetNamedSecurityInfoW(
+                        name.as_mut_ptr(),
+                        1,
+                        4 | 0x80000000,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                    )
+                },
+                0
+            );
+            assert_eq!(verify(&root, true).unwrap_err(), UNSAFE);
+            harden(&root, true).unwrap();
+        }
+    }
+}
 #[cfg(any(windows, test))]
 fn normalized(s: &str) -> String {
     s.replace('/', "\\")

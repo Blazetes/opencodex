@@ -5,6 +5,8 @@ const nodes = Object.fromEntries(["enabled", "state", "target", "issues", "error
 let busy = false;
 let latest = null;
 let polling = false;
+let generation = 0;
+let refreshQueued = false;
 function controls() {
   nodes.enabled.disabled = busy || !invoke;
   nodes.repair.disabled = busy || !invoke || !latest?.enabled;
@@ -35,20 +37,32 @@ function bounded(work) {
 }
 async function refresh() {
   if (!invoke || busy || polling) return;
+  const request = ++generation;
   polling = true;
-  try { render(await bounded(invoke("cli_status"))); }
-  catch (e) { nodes.error.textContent = String(e); nodes.error.hidden = false; }
-  finally { polling = false; }
+  try {
+    const s = await bounded(invoke("cli_status"));
+    if (request === generation) render(s);
+  } catch (e) {
+    if (request === generation) { nodes.error.textContent = String(e); nodes.error.hidden = false; }
+  } finally {
+    polling = false;
+    if (refreshQueued) { refreshQueued = false; await refresh(); }
+  }
 }
 async function action(name, args) {
   if (!invoke || busy) return;
+  const request = ++generation;
   busy = true; controls(); nodes.error.hidden = true;
   try {
     const s = await bounded(args === undefined ? invoke(name) : invoke(name, args));
-    if (s) render(s);
+    if (request === generation && s) render(s);
   } catch (e) {
-    nodes.error.textContent = String(e); nodes.error.hidden = false;
-  } finally { busy = false; controls(); await refresh(); }
+    if (request === generation) { nodes.error.textContent = String(e); nodes.error.hidden = false; }
+  } finally {
+    busy = false; controls();
+    if (polling) refreshQueued = true;
+    else await refresh();
+  }
 }
 nodes.enabled.addEventListener("change", () => action("cli_set_enabled", { enabled: nodes.enabled.checked }));
 nodes.repair.addEventListener("click", () => action("cli_install"));
