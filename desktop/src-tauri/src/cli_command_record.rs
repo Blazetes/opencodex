@@ -945,7 +945,22 @@ pub(crate) mod tests {
             let root = s.root.to_str().unwrap().replace('\\', "\\\\");
             let json = json.replace("/fixture/desktop", &root);
             let r: Record = serde_json::from_str(&json).unwrap();
-            assert_eq!(s.validate_for(&r, false, host).is_ok(), valid);
+            // Path rules follow the real host, so a Windows test run cannot simulate a POSIX host.
+            // There it checks the real contract instead: another platform's enabled record is
+            // refused, and a bundle-less disabled tombstone stays valid.
+            if cfg!(windows) && host != "win32" {
+                assert_eq!(
+                    s.validate(&r, false).is_ok(),
+                    !r.enabled,
+                    "{host} fixture on win32"
+                );
+                continue;
+            }
+            assert_eq!(
+                s.validate_for(&r, false, host).is_ok(),
+                valid,
+                "{host} fixture: {json}"
+            );
             if r.enabled && r.bundle.as_ref().unwrap().platform != platform() {
                 assert!(s.validate(&r, false).is_err());
             }
