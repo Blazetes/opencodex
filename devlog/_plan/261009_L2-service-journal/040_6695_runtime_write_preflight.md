@@ -40,6 +40,7 @@ Co-author: `Co-authored-by: ismell0992-afk <ismell0992@gmail.com>`.
   - the created root becomes nonempty before cleanup → it survives
   - the root pathname is replaced by another empty directory → the replacement survives
 - **Superseded wording.** In "Reflection dispositions" below, item 1 (refuse when absent) and the absent-root case in item 5 are superseded by B4 above. Absent roots are created and probed under custody rules.
+- **Code-review disposition (C, wp4 review 01a11e65-ceb5).** Pathname-based root cleanup cannot keep custody across a concurrent rename-and-replace. The preflight therefore never deletes the config root. When it creates an absent root and the probe then refuses, the empty root is left in place. The aborted fresh install is unaffected, and an empty root stays claimable (`windows-ops.ts` claims empty roots). This supersedes the cleanup half of the B4 re-audit; the tests now assert preservation. Also, an orchestrated install admits the runtime once, before `prepareServiceInstall`, and calls internal commit functions with the frozen runtime. Direct public installer calls keep their own admission, so no second preflight can refuse after a stop.
 
 ## Reflection dispositions (architect 01a11e35-f578, MISALIGNED → folded)
 
