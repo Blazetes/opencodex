@@ -909,4 +909,149 @@ mod tests {
         )
         .unwrap();
     }
+    #[test]
+    #[ignore = "explicit real-shell evidence using an isolated temporary HOME"]
+    fn real_shell_selects_desktop_shim_on_temp_home() {
+        use std::{io::Write, process::Command};
+
+        let t = Temp::new();
+        let npm = t.0.join("npm-bin");
+        record::private_dir(&npm).unwrap();
+        record::atomic(&npm.join("ocx"), None, b"#!/bin/sh\necho npm-ocx\n", 0o700).unwrap();
+        let app = if cfg!(target_os = "macos") {
+            t.0.join("Applications/OpenCodex.app/Contents/MacOS")
+        } else {
+            t.0.join("usr/bin")
+        };
+        fs::create_dir_all(&app).unwrap();
+        let exe = app.join("OpenCodex");
+        let cli = app.join("ocx");
+        record::atomic(&exe, None, b"#!/bin/sh\nexit 0\n", 0o700).unwrap();
+        // The real CLI consumes the shim's private proof argument before dispatch.
+        record::atomic(
+            &cli,
+            None,
+            b"#!/bin/sh\ncase ${1-} in --ocx-internal-launch-proof=*) shift ;; esac\necho desktop-ocx \"$@\"\n",
+            0o700,
+        )
+        .unwrap();
+        #[cfg(target_os = "macos")]
+        let installed_bundle = stable_bundle(&exe, false, "1").unwrap();
+        #[cfg(not(target_os = "macos"))]
+        let installed_bundle = Bundle {
+            app_executable: text(&exe).unwrap(),
+            cli_executable: text(&cli).unwrap(),
+            ..bundle()
+        };
+
+        let prepend = format!("export PATH=\"{}:$PATH\"\n", npm.display());
+        let bash_profile = format!("{prepend}. \"$HOME/.bashrc\"\n");
+        for (name, contents) in [
+            (".zshrc", prepend.as_str()),
+            (".bashrc", prepend.as_str()),
+            (".bash_profile", bash_profile.as_str()),
+        ] {
+            record::atomic(&t.0.join(name), None, contents.as_bytes(), 0o600).unwrap();
+        }
+        // Inject selectors instead of consulting the developer's ZDOTDIR/XDG settings.
+        let selected = targets_in(&t.0, None, None).unwrap();
+        let s = Store::open(
+            t.0.join("record"),
+            selected.iter().map(|(_, path)| path.clone()).collect(),
+        )
+        .unwrap();
+        let mut r = Record::fresh(installed_bundle.clone());
+        let shim = s.root.join("bin/ocx");
+        let shells: Vec<_> = ["zsh", "bash"]
+            .into_iter()
+            .filter_map(|shell| {
+                let executable = ["/bin", "/usr/bin", "/usr/local/bin", "/opt/homebrew/bin"]
+                    .into_iter()
+                    .map(|directory| Path::new(directory).join(shell))
+                    .find(|path| path.is_file());
+                if executable.is_none() {
+                    eprintln!("{shell}: skipped (shell unavailable)");
+                }
+                executable.map(|executable| (shell, executable))
+            })
+            .collect();
+        let check_shells = |expected_path: &Path, expected_output: &str| {
+            for (shell, executable) in &shells {
+                let mut command = Command::new(executable);
+                command
+                    .env_clear()
+                    .env("HOME", &t.0)
+                    .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+                    .env("TERM", "dumb")
+                    .current_dir(&t.0);
+                if *shell == "bash" {
+                    command.arg("-l");
+                }
+                let output = command
+                    .args(["-i", "-c", "command -v ocx; ocx hello"])
+                    .output()
+                    .expect("cannot start real shell");
+                assert!(output.status.success(), "{shell}: command failed");
+                let stdout = String::from_utf8(output.stdout).expect("shell stdout is not UTF-8");
+                let lines: Vec<_> = stdout.lines().collect();
+                // Keep captured system-rc output and temporary HOME paths out of failure logs.
+                assert!(
+                    lines.len() == 2,
+                    "{shell}: expected exactly two stdout lines"
+                );
+                assert!(
+                    lines[0] == expected_path.to_str().unwrap(),
+                    "{shell}: command resolution selected the wrong executable"
+                );
+                assert!(lines[1] == expected_output, "{shell}: wrong CLI output");
+            }
+        };
+        check_shells(&npm.join("ocx"), "npm-ocx");
+        for reconcile in [false, true] {
+            if reconcile {
+                for name in [".zshrc", ".bashrc"] {
+                    let p = t.0.join(name);
+                    assert!(fs::read_to_string(&p)
+                        .unwrap()
+                        .ends_with(&format!("{END}\n")));
+                    fs::OpenOptions::new()
+                        .append(true)
+                        .open(&p)
+                        .unwrap()
+                        .write_all(prepend.as_bytes())
+                        .unwrap();
+                    assert!(fs::read_to_string(&p).unwrap().ends_with(&prepend));
+                }
+            }
+            let (next, changes, issues) =
+                plan(&s, &r, installed_bundle.clone(), &t.0, selected.clone()).unwrap();
+            assert!(issues.is_empty(), "installation reported issues");
+            s.transact(&mut r, next, changes, "install").unwrap();
+            assert!(shim.is_file() && s.root.join("path.sh").is_file());
+            for name in [".zshrc", ".bashrc", ".bash_profile"] {
+                let contents = fs::read_to_string(t.0.join(name)).unwrap();
+                assert!(contents.ends_with(&format!("{END}\n")));
+                assert_eq!(contents.matches(START).count(), 1);
+            }
+            check_shells(&shim, "desktop-ocx hello");
+        }
+        r.enabled = false;
+        s.save(&r).unwrap();
+        let (next, changes, issues) = remove_plan(&s, &r).unwrap();
+        assert!(issues.is_empty(), "removal reported issues");
+        s.transact(&mut r, next, changes, "remove").unwrap();
+        assert!(r.posix.is_none());
+        assert!(!shim.exists() && !s.root.join("path.sh").exists());
+        for (name, expected) in [
+            (".zshrc", prepend.repeat(2)),
+            (".bashrc", prepend.repeat(2)),
+            (".bash_profile", bash_profile),
+        ] {
+            assert!(
+                fs::read_to_string(t.0.join(name)).unwrap() == expected,
+                "user rc contents were changed during removal"
+            );
+        }
+        check_shells(&npm.join("ocx"), "npm-ocx");
+    }
 }
