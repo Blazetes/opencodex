@@ -192,6 +192,14 @@ Pool mode needs stable public names and a store that survives concurrent refresh
 
 ## Sidecars, management, and UI
 
+`src/codex/auth-api/account-selection.ts` commits manual active-account and pin changes against
+the latest config under the mutation coordinator. Re-selecting the same account and explicitly
+clearing selection retain their command intent; unrelated saved fields remain untouched. Both
+the live roster and the current persisted roster must admit a selected account. Removed, paused,
+or validation-pending targets are rejected before changing routing. Confirmed publication precedes
+live selection/baseline adoption and affinity reset; an unavailable saved config leaves prior routing
+intact. A post-publication bookkeeping failure adopts only a strictly verified matching selection.
+
 The desktop restart adapter uses [Windows process ownership and installation membership](../runtime.md#codex-desktop-process-membership), independently of Pool/Direct credential selection.
 
 HTTP/SSE, Responses WebSocket, compact, images, search, and vision resolve the same account mode.

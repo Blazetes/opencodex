@@ -525,6 +525,7 @@
     "codebuddy-tool-bridge-turn.test.ts": "providers",
     "codebuddy-tool-bridge.test.ts": "providers",
     "codex-account-delete-atomicity.test.ts": "codex-integration",
+    "codex-account-selection-atomicity.test.ts": "codex-integration",
     "codex-account-label.test.ts": "codex-integration",
     "codex-account-mode-state.test.ts": "gui",
     "codex-account-namespaces.test.ts": "codex-integration",
