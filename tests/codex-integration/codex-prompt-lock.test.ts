@@ -136,6 +136,8 @@ describe("interleavings", () => {
       const completionUntil = Date.now() + 30000;
       writeFileSync(go, "go");
       while (!children.every((_, i) => existsSync(path + ".result-" + i))) {
+        const crashed = children.findIndex((child, i) => child.exitCode !== null && !existsSync(path + ".result-" + i));
+        if (crashed >= 0) throw Error(`contender ${crashed} exited ${children[crashed].exitCode} without a result: ${await new Response(children[crashed].stderr).text()}`);
         if (Date.now() > completionUntil) throw Error("contenders did not finish acquisition");
         await Bun.sleep(5);
       }
