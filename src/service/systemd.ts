@@ -104,7 +104,7 @@ WantedBy=default.target
 function userRuntimeDir(): string | null {
   const env = { ...process.env };
   if (env.XDG_RUNTIME_DIR && !existsSync(env.XDG_RUNTIME_DIR)) delete env.XDG_RUNTIME_DIR;
-  return systemdUserBusEnvironment(env).XDG_RUNTIME_DIR ?? null;
+  return systemdUserBusEnvironment(env).XDG_RUNTIME_DIR || null;
 }
 
 /** Return explicit SSH user-bus discovery without changing the caller's environment. */
