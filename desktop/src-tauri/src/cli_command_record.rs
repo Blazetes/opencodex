@@ -941,7 +941,9 @@ pub(crate) mod tests {
                 true,
             ),
         ] {
-            let json = json.replace("/fixture/desktop", s.root.to_str().unwrap());
+            // Windows roots carry backslashes, which must stay escaped inside the JSON text.
+            let root = s.root.to_str().unwrap().replace('\\', "\\\\");
+            let json = json.replace("/fixture/desktop", &root);
             let r: Record = serde_json::from_str(&json).unwrap();
             assert_eq!(s.validate_for(&r, false, host).is_ok(), valid);
             if r.enabled && r.bundle.as_ref().unwrap().platform != platform() {
