@@ -149,6 +149,7 @@ import {
 } from "./core-codex-account";
 import { acquireUpstreamHostAdmission } from "../../codex/upstream-host-health";
 import { applyCompactionRoutingOverride, compactionRoutingKeepsProviderIdentity } from "./compaction-routing";
+import { applyMainHardLockFallbackOverride } from "./main-hard-lock-routing";
 import { codexAuthContextLogLabel } from "../../codex/account-label";
 import {
   conversationStateBindingFromAuth,
@@ -343,6 +344,16 @@ export async function prepareResponsesRequest(
         );
       }
     }
+  }
+  // The hard-lock fallback owns ordinary turns only, and only after every more specific
+  // routing setting had its chance above: a shadow-intercepted, memory-phased, compaction
+  // or decision turn keeps its own destination, and an intercepted combo selector is
+  // already owned by the intercept. A spawned sub-agent turn names its model on purpose,
+  // the same reason the shadow intercept leaves it alone. Like the sites above it, this
+  // must run before comboIdFromRawBody reads `model`.
+  if (!concreteSelection && !options.compactionRoutingOverride && !options.internalDecisionCall
+    && !shadowCallIntercepted && !memoryModelApplies && !threadSpawn && inboundWire === "responses") {
+    options.mainHardLockFallbackOverride = applyMainHardLockFallbackOverride(body, config);
   }
   const comboId = !concreteSelection ? comboIdFromRawBody(body, config) : null;
   // A decision model may be a plain model or a non-JEV combo. A JEV combo here would recurse
@@ -561,7 +572,10 @@ export async function prepareResponsesRequest(
   if (!logCtx.conversationId) {
     logCtx.conversationId = resolvedConversationId;
   }
-  logCtx.requestedModel = options.compactionRoutingOverride?.sourceModel ?? parsed.modelId;
+  // A rewritten turn logs the selector the client asked for, so the usage log never
+  // claims the operator typed the fallback model themselves.
+  logCtx.requestedModel = options.mainHardLockFallbackOverride?.sourceModel
+    ?? options.compactionRoutingOverride?.sourceModel ?? parsed.modelId;
   logCtx.requestedEffort = parsed.options.reasoning;
   // What this request may spend beyond its input, for the durable spend reservation (#4707).
   // Read from the caller rather than from the adapter's serialized body, because the
