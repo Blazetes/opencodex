@@ -1,6 +1,10 @@
 import type { OcxConfig } from "../../types";
 import { isBareOpenAiFamilyModel } from "../../router";
-import { NATIVE_RESERVE_MODEL } from "../../codex/catalog/native-models";
+import {
+  ACCOUNT_GATED_NATIVE_OPENAI_MODELS,
+  NATIVE_RESERVE_MODEL,
+} from "../../codex/catalog/native-models";
+import { entitledCodexAccountIdsForModel, resolveCodexModelEntitlements } from "../../codex/model-entitlements";
 import {
   getMainAccountHardLockStatus,
   resolveMainAccountHardLockFallback,
@@ -15,6 +19,12 @@ import { getEligiblePoolAccounts } from "../../codex/routing/selection";
 export interface MainHardLockFallbackOverride {
   sourceModel: string;
   targetModel: string;
+}
+
+export interface MainHardLockFallbackOverrideOptions {
+  /** Test seam for the entitlement resolver; production uses the real bounded discovery. */
+  resolveCodexModelEntitlements?: typeof resolveCodexModelEntitlements;
+  signal?: AbortSignal;
 }
 
 function rawModelOf(body: unknown): { raw: Record<string, unknown>; model: string } | undefined {
@@ -40,7 +50,11 @@ function rawModelOf(body: unknown): { raw: Record<string, unknown>; model: strin
  *   so "the pool can serve it" is one shared answer, not a second opinion: a usable pool
  *   account (or any eligible account) keeps the request on Codex, and a pool drained to
  *   empty is what makes the fallback the request's only way through. The main account is
- *   already excluded there while blocked.
+ *   already excluded there while blocked. Account-gated native models narrow that answer
+ *   by the same entitlement evidence the auth selection resolves for them — a generally
+ *   usable account that cannot serve THIS model must not hold the fallback back while the
+ *   dispatch would refuse the request later with `CodexModelAvailabilityError`. A failed
+ *   resolution narrows nothing: absence of evidence never widens the failure mode.
  * - Only bare Codex-native selectors qualify. Provider-qualified rows, combos, account
  *   namespaces and policy routes name their own destination on purpose; rewriting those
  *   would override an explicit choice, so they keep the lock's refusal.
@@ -49,10 +63,11 @@ function rawModelOf(body: unknown): { raw: Record<string, unknown>; model: strin
  * - Luna Reserve keeps its own admission policy (`assertReserveAdmission`); its helper
  *   traffic is not operator chat and must not silently change models.
  */
-export function applyMainHardLockFallbackOverride(
+export async function applyMainHardLockFallbackOverride(
   body: unknown,
   config: OcxConfig,
-): MainHardLockFallbackOverride | null {
+  options: MainHardLockFallbackOverrideOptions = {},
+): Promise<MainHardLockFallbackOverride | null> {
   const parsed = rawModelOf(body);
   if (!parsed) return null;
   const fallback = resolveMainAccountHardLockFallback(config);
@@ -60,7 +75,22 @@ export function applyMainHardLockFallbackOverride(
   if (isBareOpenAiFamilyModel(fallback.model)) return null;
   if (!isBareOpenAiFamilyModel(parsed.model) || parsed.model === NATIVE_RESERVE_MODEL) return null;
   if (getMainAccountHardLockStatus(config).state !== "blocked") return null;
-  if (getEligiblePoolAccounts(config).length > 0) return null;
+  let modelEligibleAccountIds: ReadonlySet<string> | undefined;
+  if (ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(parsed.model)) {
+    try {
+      const snapshot = await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(
+        config,
+        { signal: options.signal },
+      );
+      modelEligibleAccountIds = entitledCodexAccountIdsForModel(snapshot, parsed.model);
+    } catch {
+      // Discovery failure is "unknown", not "unusable": leave selection exactly as it was.
+      modelEligibleAccountIds = undefined;
+    }
+  }
+  if (getEligiblePoolAccounts(config, undefined, Date.now(), undefined, { modelEligibleAccountIds }).length > 0) {
+    return null;
+  }
 
   parsed.raw.model = fallback.model;
   if (fallback.reasoningEffort !== undefined) {

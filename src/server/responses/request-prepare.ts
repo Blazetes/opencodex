@@ -353,7 +353,7 @@ export async function prepareResponsesRequest(
   // must run before comboIdFromRawBody reads `model`.
   if (!concreteSelection && !options.compactionRoutingOverride && !options.internalDecisionCall
     && !shadowCallIntercepted && !memoryModelApplies && !threadSpawn && inboundWire === "responses") {
-    options.mainHardLockFallbackOverride = applyMainHardLockFallbackOverride(body, config);
+    options.mainHardLockFallbackOverride = await applyMainHardLockFallbackOverride(body, config);
   }
   const comboId = !concreteSelection ? comboIdFromRawBody(body, config) : null;
   // A decision model may be a plain model or a non-JEV combo. A JEV combo here would recurse

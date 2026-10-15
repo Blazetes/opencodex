@@ -7,7 +7,8 @@ import { resolveMainAccountHardLockFallback } from "../../src/codex/main-account
 import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaIdentity } from "../../src/codex/main-account-cache";
 import { clearAccountQuota, setAccountQuotaFromParsed, type StoredAccountQuota } from "../../src/codex/quota";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
-import { NATIVE_RESERVE_MODEL } from "../../src/codex/catalog/native-models";
+import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_DAYBREAK_BLUE_MODEL, NATIVE_RESERVE_MODEL } from "../../src/codex/catalog/native-models";
+import type { CodexModelEntitlementSnapshot } from "../../src/codex/model-entitlements";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -54,7 +55,7 @@ function withPoolAccount(target: OcxConfig): OcxConfig {
 }
 
 describe("main-account hard-lock fallback resolution", () => {
-  test("a malformed section disables the reroute instead of half-applying", () => {
+  test("a malformed section disables the reroute instead of half-applying", async () => {
     expect(resolveMainAccountHardLockFallback(config())).toBeUndefined();
     expect(resolveMainAccountHardLockFallback({ codexMainAccountHardLockFallback: { model: "  " } } as OcxConfig)).toBeUndefined();
     expect(resolveMainAccountHardLockFallback({ codexMainAccountHardLockFallback: { model: " deepseek/deepseek-chat" } } as OcxConfig)).toBeUndefined();
@@ -72,94 +73,140 @@ describe("main-account hard-lock fallback resolution", () => {
 });
 
 describe("applyMainHardLockFallbackOverride", () => {
-  test("a blocked lock with no eligible account rewrites the model and the effort", () => {
+  test("a blocked lock with no eligible account rewrites the model and the effort", async () => {
     observe({ weeklyPercent: 98 });
     const body: Record<string, unknown> = { model: "gpt-5.3", reasoning: { effort: "high" } };
-    expect(applyMainHardLockFallbackOverride(body, config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>)))
+    expect(await applyMainHardLockFallbackOverride(body, config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>)))
       .toEqual({ sourceModel: "gpt-5.3", targetModel: "deepseek/deepseek-chat" });
     expect(body.model).toBe("deepseek/deepseek-chat");
     expect(body.reasoning).toEqual({ effort: "low" });
   });
 
-  test("each blocking window governs on its own", () => {
+  test("each blocking window governs on its own", async () => {
     const cfg = config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>);
     observe({ shortPercent: 90 });
-    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).not.toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).not.toBeNull();
     observe({ shortPercent: 0 });
-    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).toBeNull();
     observe({ weeklyPercent: 98 });
-    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).not.toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).not.toBeNull();
     observe({ weeklyPercent: 0 });
-    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).toBeNull();
   });
 
-  test("a monthly-only account governs on monthly; supplementary monthly data never blocks", () => {
+  test("a monthly-only account governs on monthly; supplementary monthly data never blocks", async () => {
     const cfg = config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>);
     // No short or weekly evidence at all: monthly is the account's only window.
     observe({ monthlyPercent: 99 });
-    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).not.toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).not.toBeNull();
     observe({ monthlyPercent: 50 });
-    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).toBeNull();
     // Supplementary monthly data on a 5h/weekly account never becomes a lock.
     observe({ shortPercent: 10, weeklyPercent: 10, monthlyPercent: 99 });
-    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).toBeNull();
   });
 
-  test("release is the same observation that admits: dropping below the threshold stops the rewrite", () => {
+  test("release is the same observation that admits: dropping below the threshold stops the rewrite", async () => {
     const cfg = config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>);
     observe({ weeklyPercent: 99 });
-    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).not.toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).not.toBeNull();
     observe({ weeklyPercent: 97.99 });
-    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg)).toBeNull();
   });
 
-  test("unknown usage, the opt-out, and a missing section all keep the refusal behavior", () => {
-    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>))).toBeNull();
+  test("unknown usage, the opt-out, and a missing section all keep the refusal behavior", async () => {
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>))).toBeNull();
     observe({ weeklyPercent: 100 });
-    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, config({ codexMainAccountHardLock: false, codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>))).toBeNull();
-    expect(applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, config())).toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, config({ codexMainAccountHardLock: false, codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>))).toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, config())).toBeNull();
   });
 
-  test("an eligible pool account keeps the request on Codex", () => {
+  test("an eligible pool account keeps the request on Codex", async () => {
     observe({ weeklyPercent: 100 });
     const cfg = withPoolAccount(config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>));
     const body: Record<string, unknown> = { model: "gpt-5.3" };
-    expect(applyMainHardLockFallbackOverride(body, cfg)).toBeNull();
+    expect(await applyMainHardLockFallbackOverride(body, cfg)).toBeNull();
     expect(body.model).toBe("gpt-5.3");
   });
 
-  test("only bare Codex-native selectors qualify", () => {
+  test("only bare Codex-native selectors qualify", async () => {
     observe({ weeklyPercent: 100 });
     const cfg = config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>);
     for (const model of ["deepseek/deepseek-chat", "combo/x", "openai-codex/gpt-5.3", NATIVE_RESERVE_MODEL]) {
       const body: Record<string, unknown> = { model };
-      expect(applyMainHardLockFallbackOverride(body, cfg)).toBeNull();
+      expect(await applyMainHardLockFallbackOverride(body, cfg)).toBeNull();
       expect(body.model).toBe(model);
     }
   });
 
-  test("a Codex-native fallback target never applies: the refusal is the honest answer", () => {
+  test("a Codex-native fallback target never applies: the refusal is the honest answer", async () => {
     observe({ weeklyPercent: 100 });
     const body: Record<string, unknown> = { model: "gpt-5.3" };
-    expect(applyMainHardLockFallbackOverride(body, config({ codexMainAccountHardLockFallback: { model: "gpt-5.4" } } as Partial<OcxConfig>))).toBeNull();
+    expect(await applyMainHardLockFallbackOverride(body, config({ codexMainAccountHardLockFallback: { model: "gpt-5.4" } } as Partial<OcxConfig>))).toBeNull();
     expect(body.model).toBe("gpt-5.3");
   });
 
-  test("a fallback without an effort leaves the request's own reasoning untouched", () => {
+  test("a fallback without an effort leaves the request's own reasoning untouched", async () => {
     observe({ weeklyPercent: 100 });
     const cfg = config({ codexMainAccountHardLockFallback: { model: "deepseek/deepseek-chat" } } as Partial<OcxConfig>);
     const body: Record<string, unknown> = { model: "gpt-5.3", reasoning: { effort: "high" } };
-    expect(applyMainHardLockFallbackOverride(body, cfg)).toEqual({ sourceModel: "gpt-5.3", targetModel: "deepseek/deepseek-chat" });
+    expect(await applyMainHardLockFallbackOverride(body, cfg)).toEqual({ sourceModel: "gpt-5.3", targetModel: "deepseek/deepseek-chat" });
     expect(body.model).toBe("deepseek/deepseek-chat");
     expect(body.reasoning).toEqual({ effort: "high" });
   });
 
-  test("a body without a usable model selector is never touched", () => {
+  test("a body without a usable model selector is never touched", async () => {
     observe({ weeklyPercent: 100 });
     const cfg = config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>);
-    expect(applyMainHardLockFallbackOverride(null, cfg)).toBeNull();
-    expect(applyMainHardLockFallbackOverride([], cfg)).toBeNull();
-    expect(applyMainHardLockFallbackOverride({ model: "" }, cfg)).toBeNull();
-    expect(applyMainHardLockFallbackOverride({ model: 42 }, cfg)).toBeNull();
+    expect(await applyMainHardLockFallbackOverride(null, cfg)).toBeNull();
+    expect(await applyMainHardLockFallbackOverride([], cfg)).toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: "" }, cfg)).toBeNull();
+    expect(await applyMainHardLockFallbackOverride({ model: 42 }, cfg)).toBeNull();
+  });
+});
+
+describe("applyMainHardLockFallbackOverride model entitlement", () => {
+  const gatedModel = NATIVE_DAYBREAK_BLUE_MODEL;
+  expect(ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(gatedModel)).toBe(true);
+  const snapshot = (grantsPoolA: boolean): CodexModelEntitlementSnapshot => ({
+    modelsByAccount: new Map([["pool-a", new Set(grantsPoolA ? [gatedModel] : ["gpt-5.3"])]]),
+    clientVersionByAccount: new Map([["pool-a", "9.9.9"]]),
+    confirmedAccountIds: new Set(["pool-a"]),
+    credentialIdentities: new Map(),
+  });
+  const resolver = (grantsPoolA: boolean) => async () => snapshot(grantsPoolA);
+
+  test("an entitled pool account keeps the gated request on Codex", async () => {
+    observe({ weeklyPercent: 100 });
+    const cfg = withPoolAccount(config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>));
+    expect(await applyMainHardLockFallbackOverride({ model: gatedModel }, cfg, { resolveCodexModelEntitlements: resolver(true) })).toBeNull();
+  });
+
+  test("a pool account that cannot serve the gated model no longer holds the fallback back", async () => {
+    observe({ weeklyPercent: 100 });
+    const cfg = withPoolAccount(config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>));
+    const body: Record<string, unknown> = { model: gatedModel };
+    expect(await applyMainHardLockFallbackOverride(body, cfg, { resolveCodexModelEntitlements: resolver(false) }))
+      .toEqual({ sourceModel: gatedModel, targetModel: "deepseek/deepseek-chat" });
+    expect(body.model).toBe("deepseek/deepseek-chat");
+  });
+
+  test("a failed entitlement resolution narrows nothing and keeps the refusal behavior", async () => {
+    observe({ weeklyPercent: 100 });
+    const cfg = withPoolAccount(config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>));
+    const body: Record<string, unknown> = { model: gatedModel };
+    expect(await applyMainHardLockFallbackOverride(body, cfg, {
+      resolveCodexModelEntitlements: async () => { throw new Error("discovery down"); },
+    })).toBeNull();
+    expect(body.model).toBe(gatedModel);
+  });
+
+  test("ordinary native models never pay the entitlement resolution", async () => {
+    observe({ weeklyPercent: 100 });
+    let calls = 0;
+    const cfg = withPoolAccount(config({ codexMainAccountHardLockFallback: FALLBACK } as Partial<OcxConfig>));
+    const spy = async () => { calls += 1; return snapshot(true); };
+    expect(await applyMainHardLockFallbackOverride({ model: "gpt-5.3" }, cfg, { resolveCodexModelEntitlements: spy })).toBeNull();
+    expect(calls).toBe(0);
   });
 });
