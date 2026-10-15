@@ -2460,7 +2460,7 @@ export const vi: Record<TKey, string> = {
   "codexAuth.mainHardLockFallbackModel": "Mô hình dự phòng",
   "codexAuth.mainHardLockFallbackEffort": "Mức suy luận",
   "codexAuth.mainHardLockFallbackDefaultEffort": "Giữ mức của yêu cầu",
-  "codexAuth.mainHardLockFallbackActive": "Đang chặn — yêu cầu Codex gốc được chuyển tới {model}.",
+  "codexAuth.mainHardLockFallbackActive": "Đang chặn — yêu cầu Codex gốc chỉ dùng {model} khi không tài khoản Codex nào đủ điều kiện phục vụ được.",
   "codexAuth.mainHardLockFallbackSaveFailed": "Không xác nhận được việc lưu dự phòng. Hãy tải lại cài đặt rồi thử lại.",
   "codexAuth.ultraFastDesc": "Thêm lựa chọn tốc độ Ultrafast cho GPT-6 Astra và GPT-6.1 Sol trong bộ chọn model của Codex, đồng thời ngăn dịch vụ cấp độ ultrafast mà bạn tự thiết lập trên các model định tuyến bị loại bỏ khi catalog được tạo lại. Ultrafast yêu cầu gói ChatGPT đủ điều kiện; chỉ bật khi gói của bạn bao gồm nó.",
   "codexAuth.ultraFastLoadFailed": "Không thể đọc thiết lập Ultra Fast.",

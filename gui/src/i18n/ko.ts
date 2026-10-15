@@ -1945,7 +1945,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.mainHardLockFallbackModel": "폴백 모델",
   "codexAuth.mainHardLockFallbackEffort": "사고 강도",
   "codexAuth.mainHardLockFallbackDefaultEffort": "요청 강도 유지",
-  "codexAuth.mainHardLockFallbackActive": "차단 중 — 네이티브 Codex 요청이 {model}(으)로 라우팅됩니다.",
+  "codexAuth.mainHardLockFallbackActive": "차단 중 — 사용 가능한 Codex 계정이 요청을 처리할 수 없을 때만 네이티브 Codex 요청이 {model}로 라우팅됩니다.",
   "codexAuth.mainHardLockFallbackSaveFailed": "폴백 저장을 확인하지 못했습니다. 설정을 다시 불러온 뒤 재시도하세요.",
   "codexAuth.ultraFastDesc": "Codex 모델 피커에서 GPT-6 Astra와 GPT-6.1 Sol에 Ultrafast 속도 선택지를 추가하고, 라우팅 모델에 직접 설정한 ultrafast 티어가 카탈로그를 다시 만들 때 지워지지 않게 합니다. Ultrafast는 해당 ChatGPT 요금제가 필요하므로, 요금제에 포함된 경우에만 켜세요.",
   "codexAuth.ultraFastLoadFailed": "Ultra Fast 설정을 읽지 못했습니다.",

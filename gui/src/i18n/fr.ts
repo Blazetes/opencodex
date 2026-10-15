@@ -2439,7 +2439,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.mainHardLockFallbackModel": "Modèle de repli",
   "codexAuth.mainHardLockFallbackEffort": "Effort de réflexion",
   "codexAuth.mainHardLockFallbackDefaultEffort": "Conserver l'effort de la requête",
-  "codexAuth.mainHardLockFallbackActive": "Blocage en cours — les requêtes Codex natives sont routées vers {model}.",
+  "codexAuth.mainHardLockFallbackActive": "Blocage en cours — les requêtes Codex natives utilisent {model} uniquement lorsqu'aucun compte Codex Pool éligible ne peut les traiter.",
   "codexAuth.mainHardLockFallbackSaveFailed": "Impossible de confirmer l'enregistrement du repli. Rechargez le réglage avant de réessayer.",
   "codexAuth.ultraFastDesc": "Ajoute l’option de vitesse Ultrafast à GPT-6 Astra et GPT-6.1 Sol dans le sélecteur de modèles de Codex, et empêche la suppression d’un niveau de service ultrafast que vous avez configuré vous-même sur des modèles routés lors de la régénération du catalogue. Ultrafast nécessite un forfait ChatGPT éligible ; activez-le uniquement si votre forfait l’inclut.",
   "codexAuth.ultraFastLoadFailed": "Impossible de lire le réglage Ultra Fast.",

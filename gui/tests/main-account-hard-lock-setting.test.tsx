@@ -533,7 +533,11 @@ describe("main account hard-lock fallback setting", () => {
         return response({ ok: true, ...settingsWithFallback({ model: body.model }) });
       }
       if (String(_input).endsWith("/api/models")) {
-        return response([{ id: "chat", provider: "deepseek", namespaced: "deepseek/deepseek-chat" }]);
+        // Bare native rows are catalog-real but can never be a fallback destination.
+        return response([
+          { id: "chat", provider: "deepseek", namespaced: "deepseek/deepseek-chat" },
+          { id: "gpt-5.3", provider: "openai", namespaced: "gpt-5.3" },
+        ]);
       }
       return response(settings(true));
     }) as typeof fetch);
@@ -542,6 +546,23 @@ describe("main account hard-lock fallback setting", () => {
     expect(puts).toEqual([{ model: "deepseek/deepseek-chat" }]);
     expect(fallbackSwitch(host).getAttribute("aria-pressed")).toBe("true");
     expect(selectTriggers(host)[1]!.hasAttribute("disabled")).toBe(false);
+  });
+
+  test("the fallback picker never offers a bare native selector", async () => {
+    const host = await mount((async (_input, init) => {
+      if (String(_input).endsWith("/api/models")) {
+        return response([
+          { id: "chat", provider: "deepseek", namespaced: "deepseek/deepseek-chat" },
+          { id: "gpt-5.3", provider: "openai", namespaced: "gpt-5.3" },
+        ]);
+      }
+      return response(settings(true));
+    }) as typeof fetch);
+    await act(async () => { await flush(); await flush(); });
+    await act(async () => { selectTriggers(host)[0]!.click(); await flush(); });
+    const labels = optionButtons().map(button => button.textContent);
+    expect(labels).toContain("deepseek/deepseek-chat");
+    expect(labels).not.toContain("gpt-5.3");
   });
 
   test("a failed save shows the alert and keeps the switch state the server last confirmed", async () => {

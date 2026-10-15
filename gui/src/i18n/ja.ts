@@ -2334,7 +2334,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.mainHardLockFallbackModel": "フォールバックモデル",
   "codexAuth.mainHardLockFallbackEffort": "思考エフォート",
   "codexAuth.mainHardLockFallbackDefaultEffort": "リクエストのエフォートを維持",
-  "codexAuth.mainHardLockFallbackActive": "ブロック中 — ネイティブCodexリクエストは{model}へルーティングされます。",
+  "codexAuth.mainHardLockFallbackActive": "ブロック中 — 利用可能なCodex Poolアカウントがない場合、ネイティブCodexリクエストは{model}へルーティングされます。",
   "codexAuth.mainHardLockFallbackSaveFailed": "フォールバックの保存を確認できませんでした。設定を再読み込みしてから再試行してください。",
   "codexAuth.ultraFastDesc": "Codex のモデルピッカーで GPT-6 Astra と GPT-6.1 Sol に Ultrafast の速度選択肢を追加し、ルーティングモデルに自分で設定した ultrafast ティアがカタログ再生成時に削除されないようにします。Ultrafast には対象の ChatGPT プランが必要です。プランに含まれている場合のみ有効にしてください。",
   "codexAuth.ultraFastLoadFailed": "Ultra Fast 設定を読み取れませんでした。",

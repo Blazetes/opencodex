@@ -2485,7 +2485,7 @@ export const pt: Record<TKey, string> = {
   "codexAuth.mainHardLockFallbackModel": "Modelo de fallback",
   "codexAuth.mainHardLockFallbackEffort": "Esforço de raciocínio",
   "codexAuth.mainHardLockFallbackDefaultEffort": "Manter esforço da solicitação",
-  "codexAuth.mainHardLockFallbackActive": "Bloqueando agora — solicitações Codex nativas são roteadas para {model}.",
+  "codexAuth.mainHardLockFallbackActive": "Bloqueando agora — as solicitações Codex nativas usam {model} somente quando nenhuma conta Codex elegível pode atendê-las.",
   "codexAuth.mainHardLockFallbackSaveFailed": "Não foi possível confirmar o salvamento do fallback. Recarregue a configuração antes de tentar de novo.",
   "codexAuth.ultraFastDesc": "Adiciona a opção de velocidade Ultrafast ao GPT-6 Astra e ao GPT-6.1 Sol no seletor de modelos do Codex e impede que um nível de serviço ultrafast configurado por você em modelos roteados seja removido quando o catálogo é regenerado. O Ultrafast exige um plano do ChatGPT elegível; ative apenas se o seu plano o incluir.",
   "codexAuth.ultraFastLoadFailed": "Não foi possível ler a configuração do Ultra Fast.",

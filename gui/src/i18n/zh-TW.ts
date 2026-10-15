@@ -1814,7 +1814,7 @@ export const zhTW: Record<TKey, string> = {
   "codexAuth.mainHardLockFallbackModel": "後備模型",
   "codexAuth.mainHardLockFallbackEffort": "思考強度",
   "codexAuth.mainHardLockFallbackDefaultEffort": "保留請求原強度",
-  "codexAuth.mainHardLockFallbackActive": "正在封鎖——原生 Codex 請求已路由到 {model}。",
+  "codexAuth.mainHardLockFallbackActive": "正在封鎖——僅當沒有可用的 Codex 帳戶能服務請求時，原生 Codex 請求才路由到 {model}。",
   "codexAuth.mainHardLockFallbackSaveFailed": "無法確認後備設定已儲存。請重新載入設定後再試。",
   "codexAuth.ultraFastDesc": "在 Codex 模型選擇器中為 GPT-6 Astra 與 GPT-6.1 Sol 加入 Ultrafast 速度選項，並讓你在路由模型上自行設定的 ultrafast 服務層級在重新產生目錄時不被移除。Ultrafast 需要符合資格的 ChatGPT 方案，僅在你的方案包含它時開啟。",
   "codexAuth.ultraFastLoadFailed": "無法讀取 Ultra Fast 設定。",

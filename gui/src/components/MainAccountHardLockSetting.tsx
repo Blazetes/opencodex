@@ -347,7 +347,12 @@ function HardLockSetting({ apiBase, onSaved }: Props) {
               <span className="knob" />
             </button>
             <Select value={fallback?.model ?? ""}
-              options={[...new Set([fallback?.model, ...models.map(model => model.namespaced)]
+              options={[...new Set([fallback?.model, ...models
+                // Native catalog rows carry bare ids the fallback may never target (the
+                // router refuses bare OpenAI-family destinations), so only qualified
+                // selectors are offered; the saved value stays visible regardless.
+                .filter(model => model.namespaced.includes("/"))
+                .map(model => model.namespaced)]
                 .filter((value): value is string => Boolean(value)))]
                 .map(value => ({ value, label: formatNamespacedModelId(value, t) }))}
               onChange={changeFallbackModel}

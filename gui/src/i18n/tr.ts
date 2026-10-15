@@ -2463,7 +2463,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.mainHardLockFallbackModel": "Yedek model",
   "codexAuth.mainHardLockFallbackEffort": "Düşünme çabası",
   "codexAuth.mainHardLockFallbackDefaultEffort": "İsteğin çabasını koru",
-  "codexAuth.mainHardLockFallbackActive": "Şu anda engelleniyor — yerel Codex istekleri {model} modeline yönlendirilir.",
+  "codexAuth.mainHardLockFallbackActive": "Engelleniyor — uygun bir Codex Pool hesabı isteği karşılayamadığında yerel Codex istekleri {model} modeline yönlendirilir.",
   "codexAuth.mainHardLockFallbackSaveFailed": "Yedek kaydı onaylanamadı. Ayarı yeniden yükleyip tekrar deneyin.",
   "codexAuth.ultraFastDesc": "Codex model seçicisinde GPT-6 Astra ve GPT-6.1 Sol için Ultrafast hız seçeneğini ekler ve yönlendirilen modellerde kendi yapılandırdığınız ultrafast hizmet katmanının katalog yeniden oluşturulurken silinmesini önler. Ultrafast uygun bir ChatGPT planı gerektirir; yalnızca planınız içeriyorsa açın.",
   "codexAuth.ultraFastLoadFailed": "Ultra Fast ayarı okunamadı.",

@@ -1897,7 +1897,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.mainExternalUsageWarning": "Mögliche Nutzung außerhalb von opencodex. Die Sperre verhindert möglicherweise keine Erschöpfung.",
   "codexAuth.mainHardLockManage": "Schutzeinstellung anzeigen",
   "codexAuth.mainHardLockFallbackTitle": "Ausweichmodell bei Blockierung",
-  "codexAuth.mainHardLockFallbackDesc": "Während der Blockierung, wenn kein Codex-Konto eine Anfrage bedienen kann, werden Anfragen an native Codex-Modelle an dieses Modell umgeleitet, statt zu fehlschlagen. Leer lassen, um wie üblich abzulehnen; die Sperre endet von selbst.",
+  "codexAuth.mainHardLockFallbackDesc": "Während der Blockierung, wenn kein Codex-Konto eine Anfrage bedienen kann, werden Anfragen an native Codex-Modelle an dieses Modell umgeleitet, statt fehlzuschlagen. Leer lassen, um wie üblich abzulehnen; die Sperre endet von selbst.",
   "codexAuth.mainHardLockFallbackModel": "Ausweichmodell",
   "codexAuth.mainHardLockFallbackEffort": "Denkaufwand",
   "codexAuth.mainHardLockFallbackDefaultEffort": "Anfrage-Aufwand behalten",

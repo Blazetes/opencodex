@@ -1918,7 +1918,7 @@ export const zh: Record<TKey, string> = {
   "codexAuth.mainHardLockFallbackModel": "回退模型",
   "codexAuth.mainHardLockFallbackEffort": "思考强度",
   "codexAuth.mainHardLockFallbackDefaultEffort": "保留请求原强度",
-  "codexAuth.mainHardLockFallbackActive": "正在阻止——原生 Codex 请求已路由到 {model}。",
+  "codexAuth.mainHardLockFallbackActive": "正在阻止——仅当没有可用的 Codex 账户能服务请求时，原生 Codex 请求才路由到 {model}。",
   "codexAuth.mainHardLockFallbackSaveFailed": "无法确认回退设置已保存。请重新加载设置后再试。",
   "codexAuth.ultraFastDesc": "在 Codex 模型选择器中为 GPT-6 Astra 和 GPT-6.1 Sol 添加 Ultrafast 速度选项，并让你在路由模型上自行配置的 ultrafast 服务层级在重新生成目录时不被删除。Ultrafast 需要符合条件的 ChatGPT 套餐，仅在你的套餐包含它时开启。",
   "codexAuth.ultraFastLoadFailed": "无法读取 Ultra Fast 设置。",
